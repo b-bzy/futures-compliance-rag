@@ -61,6 +61,59 @@ class TestMetadataExtraction:
         assert extract_doc_no("……上证发〔2023〕48号……") == "上证发〔2023〕48号"
         assert extract_doc_no("没有文号的正文") is None
 
+    def test_doc_no_without_institution_prefix(self):
+        """郑商所《期权交易管理办法》正文只写「〔2026〕68号」，不带机构简称。
+
+        机构前缀曾是必需的，导致这份文档抽不到文号。全量扫描 190 份文档，
+        这是唯一一份这种形态 —— 修它的收益就是 49→50，如实记录。
+        """
+        assert extract_doc_no("……〔2026〕68号……") == "〔2026〕68号"
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "上证发〔2023〕48号",
+            "深证上〔2022〕1146号",
+            "中金所发〔2026〕18号",
+            "上证发〔2023〕第48号",  # 带「第」
+        ],
+    )
+    def test_doc_no_accepted_forms(self, text):
+        """这四种形态在 190 份语料里真实出现过（共 102 处，全是前缀紧贴括号）。"""
+        assert extract_doc_no(f"前置正文……{text}……后续") == text
+
+    def test_doc_no_keeps_institution_when_spaced(self):
+        """带空格时必须仍抓到机构简称，不能退化成「〔2023〕48号」。
+
+        当前语料里不存在这种形态，这是防御性测试：把机构前缀改为可选之后，
+        带空格的输入会让可选组不参与匹配，静默丢掉机构简称 —— 而机构简称是
+        引用真值的一部分，丢了比返回 None 更糟（用户无法判断这个文号出自哪家）。
+        PDF 文本抽取常在原文无空格处插入空格，所以这条不是假想问题。
+        """
+        for raw in ["上证发 〔2023〕48号", "上证发　〔 2023 〕 48 号"]:
+            assert extract_doc_no(f"……{raw}……") == "上证发〔2023〕48号"
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "合约标的：华夏上证科创板50ETF　合约类型：认购期权、认沽期权",
+            "本所交易时间为每周一至周五上午9:30-11:30，下午13:00-15:00。",
+            "Chapter 10 Contract Specifications",
+            "第十二条 期权交易采用集合竞价和连续竞价两种方式。",
+            "合约乘数：每点人民币100元",
+        ],
+    )
+    def test_doc_no_absent_is_not_a_miss(self, text):
+        """返回 None 是正确行为，不是漏检 —— 这条容易被误当成 bug。
+
+        190 份文档里 140 份抽不到文号，实测这 140 份在**原始文件**里
+        也没有文号（含中金所 25 份「通知」类，原始 HTML 里 0/25 有文号）。
+        它们是合约条款表、常设规则手册、投资者问答与英文 rulebook，
+        本身不带发文字号。所以 26% 是语料属性，不是抽取缺陷。
+        「第十二条」是条款号、「Chapter 10」是章节号，都不得误判成文号。
+        """
+        assert extract_doc_no(text) is None
+
     def test_effective_date(self):
         assert extract_effective_date("本办法自2026年5月1日起施行。") == "2026-05-01"
 
