@@ -42,7 +42,12 @@ lxml>=5.0.0
 rapidocr-onnxruntime>=1.4.0       # OCR 兜底(仅 py<3.13 可装，这也是选 3.12 的原因之一)
 
 # ---------- 抓取 ----------
-httpx>=0.27.0
+# [socks] extra 不是可选的：httpx 一旦看到 ALL_PROXY=socks5://... 就要求
+# socksio，缺了会在**构造 client 时**就 ImportError。表现极具误导性 ——
+# LLM provider 健康检查直接失败、报「没有可用的 provider，请配 API key」，
+# 而 key 明明是对的；huggingface_hub 下模型也会同样报错。
+# 用 curl 测能通、用代码测不通，就是这个原因。
+httpx[socks]>=0.27.0
 tenacity>=8.0.0
 
 # ---------- 服务与界面 ----------
