@@ -3,6 +3,7 @@
     GET  /health          模型与索引状态
     POST /search          只检索，返回带引用的候选（不调用 LLM，快）
     POST /chat            完整问答，支持多轮 session
+    POST /chat/stream     同上，SSE 流式返回：引用先到，答案逐字补
     GET  /stats           语料与索引统计
 
 启动:
@@ -15,13 +16,15 @@ import json
 import logging
 import time
 import uuid
-from typing import Any
+from typing import Any, Iterator
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from ..config import load_config
 from ..pipeline import RAGPipeline
+from .confidence import assess
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("api")
@@ -143,6 +146,7 @@ def search(req: SearchRequest) -> dict[str, Any]:
     return {
         "query": req.query,
         "hits": citations,
+        "confidence": assess(citations, reranked=req.use_rerank),
         "channel_counts": result.channel_counts,
         "timings": result.timings,
         "elapsed": round(time.perf_counter() - t, 3),
@@ -174,14 +178,106 @@ def chat(req: ChatRequest) -> dict[str, Any]:
     session["history"] = history[-20:]
     _evict_stale_sessions()
 
+    citations = result.citations()
     return {
         "session_id": session_id,
         "question": req.message,
         "rewritten_query": result.rewritten_query,
         "answer": result.answer,
-        "citations": result.citations(),
+        "citations": citations,
+        "confidence": assess(citations, reranked=req.use_rerank),
         "timings": result.timings,
     }
+
+
+@app.post("/chat/stream")
+def chat_stream(req: ChatRequest) -> StreamingResponse:
+    """流式问答：先推引用，再逐 token 推答案。
+
+    RAG 的首 token 延迟天然很高 —— HyDE 要先调一次 LLM，重排在本地
+    CPU 上还要几秒，一次性返回会让界面空白十几秒。这里把"检索完成"和
+    "生成完成"拆成两个时间点：引用先到，用户可以立刻开始读条款原文，
+    答案再逐字补上。对需要当场演示的场景，这个差别决定了 demo 的成败。
+
+    事件序列: meta -> citations -> token* -> done ，出错时发 error 并终止。
+    """
+    session_id = req.session_id or str(uuid.uuid4())
+    session = _sessions.setdefault(session_id, {"history": [], "created": time.time()})
+
+    def _gen() -> Iterator[str]:
+        try:
+            # history 传副本：生成期间不希望本轮的追加影响正在用的上下文
+            result, tokens = _pipeline.stream_answer(
+                req.message,
+                history=list(session["history"]),
+                use_hyde=req.use_hyde,
+                use_rewrite=req.use_rewrite,
+                use_rerank=req.use_rerank,
+                top_k=req.top_k,
+            )
+        except RuntimeError as e:
+            yield _sse("error", {"detail": str(e)})
+            return
+
+        citations = result.citations()
+        yield _sse(
+            "meta",
+            {
+                "session_id": session_id,
+                "rewritten_query": result.rewritten_query,
+                "hypothetical": result.hypothetical,
+                "channel_counts": result.channel_counts,
+                "timings": result.timings,
+            },
+        )
+        yield _sse(
+            "citations",
+            {
+                "citations": citations,
+                "confidence": assess(citations, reranked=req.use_rerank),
+            },
+        )
+
+        parts: list[str] = []
+        t = time.perf_counter()
+        try:
+            for chunk in tokens:
+                parts.append(chunk)
+                yield _sse("token", {"text": chunk})
+        except Exception as e:  # noqa: BLE001
+            logger.error("流式生成失败: %s", e)
+            yield _sse("error", {"detail": f"生成阶段出错：{e}"})
+
+        answer = "".join(parts)
+        timings = {**result.timings, "generate": round(time.perf_counter() - t, 3)}
+
+        # 只有真的生成出内容才写回历史，否则下一轮会带着空回答做查询重写
+        if answer:
+            session["history"] = (
+                session["history"]
+                + [
+                    {"role": "user", "content": req.message},
+                    {"role": "assistant", "content": answer},
+                ]
+            )[-20:]
+        _evict_stale_sessions()
+
+        yield _sse("done", {"answer": answer, "timings": timings})
+
+    return StreamingResponse(
+        _gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            # 反向代理默认会缓冲响应体，那样流式就退化成一次性返回了
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+def _sse(event: str, payload: dict[str, Any]) -> str:
+    """拼一个 SSE 事件帧。data 里的换行已被 JSON 转义，故必为单行。"""
+    return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
 @app.delete("/chat/{session_id}")

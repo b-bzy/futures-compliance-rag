@@ -1,67 +1,60 @@
-"""Streamlit 演示界面。
+"""Streamlit 演示界面 —— 问答主页。
 
-除了问答本身，这个界面重点展示**检索过程**：三路召回各自命中了什么、
-RRF 融合后名次如何变化、重排把哪些候选提上来又把哪些压下去。
-对一个作品集项目来说，能把"混合检索 + 多阶段重排"这句话变成看得见的
-名次变化表，比任何文字描述都有说服力。
+界面通过 HTTP 访问 FastAPI，自身不加载任何模型（原因见 ui/api_client.py
+的模块说明）。答案走 SSE 流式返回：引用先到、答案逐字补，避免演示时
+空白干等 —— RAG 的首 token 延迟天然很高，一次性返回会毁掉现场节奏。
 
-启动:
+另外两个页面在 ui/pages/ 下：
+    1_检索过程剖析   一个查询在三路召回与重排之间的名次流转
+    2_效果与取舍     消融实验数据与技术决策记录
+
+启动（需先起后端）:
+    uvicorn derivrag.api.server:app --port 8000
     streamlit run src/derivrag/ui/app.py
 """
 
 from __future__ import annotations
 
 import sys
-import time
 from pathlib import Path
 
 import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from derivrag.config import load_config  # noqa: E402
-from derivrag.pipeline import RAGPipeline  # noqa: E402
+from derivrag.ui.api_client import APIError  # noqa: E402
+from derivrag.ui.components import (  # noqa: E402
+    get_client,
+    render_backend_status,
+    render_citations,
+    render_confidence,
+    render_timings,
+)
 
 st.set_page_config(page_title="期货合规条款 RAG 检索系统", page_icon="📑", layout="wide")
 
-STATUS_COLORS = {"现行有效": "🟢", "已废止": "🔴", "被修订": "🟡", "未知": "⚪"}
-
-
-@st.cache_resource(show_spinner="正在加载模型与索引（首次约需 1 分钟）…")
-def get_pipeline() -> RAGPipeline:
-    return RAGPipeline(load_config(), lazy=True)
-
-
-@st.cache_data(ttl=60)
-def get_stats() -> dict:
-    import json
-
-    p = load_config().resolve("paths.processed") / "stats.json"
-    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
-
-
-# =====================================================================
 st.title("📑 期货合规条款 RAG 检索系统")
 st.caption(
     "混合检索（BM25 + BGE-M3 稠密 + 关键词） · score-aware RRF 融合 · "
     "BGE-Reranker-v2-M3 重排 · HyDE · 多轮查询重写"
 )
 
+# ---------- 侧边栏 ----------
+health = render_backend_status()
+
 with st.sidebar:
+    st.divider()
     st.header("检索配置")
     use_hyde = st.toggle("HyDE 假设文档", value=True, help="解决口语提问与条款书面语的语义不对称")
     use_rewrite = st.toggle("多轮查询重写", value=True, help="把追问补全成独立可检索的问题")
     use_rerank = st.toggle("交叉编码器重排", value=True, help="从 top-50 精排出 top-5")
     top_k = st.slider("返回条款数", 1, 15, 5)
 
-    st.divider()
-    st.subheader("召回通路（消融）")
-    ch_bm25 = st.checkbox("BM25（分词精确匹配）", value=True)
-    ch_dense = st.checkbox("稠密向量（语义泛化）", value=True)
-    ch_keyword = st.checkbox("关键词（条号/文号定位）", value=True)
+    if not use_rerank:
+        st.caption("⚠️ 关掉重排后没有校准的分数，置信度会显示为“未知”。")
 
     st.divider()
-    stats = get_stats()
+    stats = (health or {}).get("corpus_stats") or {}
     if stats:
         st.subheader("语料规模")
         c1, c2 = st.columns(2)
@@ -70,22 +63,18 @@ with st.sidebar:
         c1.metric("检索子块", f"{stats.get('children', 0):,}")
         c2.metric("总字数", f"{stats.get('total_chars', 0):,}")
         with st.expander("按交易所"):
-            for v, n in sorted(
-                stats.get("by_venue", {}).items(), key=lambda x: -x[1]
-            ):
+            for v, n in sorted(stats.get("by_venue", {}).items(), key=lambda x: -x[1]):
                 st.write(f"- {v}: {n} 份")
 
     st.divider()
     if st.button("🗑 清空对话", use_container_width=True):
+        if sid := st.session_state.get("session_id"):
+            get_client().clear_session(sid)
         st.session_state.messages = []
+        st.session_state.pop("session_id", None)
         st.rerun()
 
-channels = tuple(
-    c
-    for c, on in (("bm25", ch_bm25), ("dense", ch_dense), ("keyword", ch_keyword))
-    if on
-)
-
+# ---------- 会话状态 ----------
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
@@ -93,99 +82,87 @@ if "messages" not in st.session_state:
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
-        if msg.get("citations"):
-            _render_citations = st.session_state.get("_render_fn")
-            if _render_citations:
-                _render_citations(msg["citations"], msg.get("meta", {}))
-
-
-def render_citations(citations: list[dict], meta: dict) -> None:
-    """引用卡片 + 检索过程可视化。"""
-    if meta.get("rewritten_query"):
-        st.info(f"🔄 查询已改写为：**{meta['rewritten_query']}**")
-
-    with st.expander(f"📎 引用条款（{len(citations)} 条）", expanded=True):
-        for c in citations:
-            flag = STATUS_COLORS.get(c["effective_status"], "⚪")
-            header = f"**[{c['index']}]** {flag} {c['doc_title']}"
-            if c["clause_id"]:
-                header += f" · {c['clause_id']}"
-            if c["doc_no"]:
-                header += f" · {c['doc_no']}"
-            st.markdown(header)
-
-            st.markdown(
-                f"<div style='background:#f6f8fa;border-left:3px solid #0969da;"
-                f"padding:8px 12px;margin:4px 0;font-size:0.9em;white-space:pre-wrap'>"
-                f"{c['text'][:1200]}</div>",
-                unsafe_allow_html=True,
-            )
-
-            bits = [f"{c['venue']}", f"重排分 {c['score']}"]
-            for ch, rank in (c.get("component_ranks") or {}).items():
-                bits.append(f"{ch}#{rank}")
-            st.caption(" · ".join(bits) + f" · [原文链接]({c['source_url']})")
-            st.divider()
-
-    if meta.get("timings"):
-        cols = st.columns(len(meta["timings"]))
-        for col, (k, v) in zip(cols, meta["timings"].items()):
-            col.metric(k, f"{v:.2f}s")
-
-
-st.session_state["_render_fn"] = render_citations
+        if msg["role"] == "assistant":
+            if msg.get("rewritten_query"):
+                st.info(f"🔄 查询已改写为：**{msg['rewritten_query']}**")
+            render_confidence(msg.get("confidence"))
+            render_citations(msg.get("citations", []), expanded=False)
 
 # ---------- 输入 ----------
-if prompt := st.chat_input("请输入关于期权条款的问题，例如：50ETF期权的合约单位是多少？"):
+PLACEHOLDER = "请输入关于期权条款的问题，例如：50ETF期权的合约单位是多少？"
+
+if prompt := st.chat_input(PLACEHOLDER, disabled=health is None):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
-        if not channels:
-            st.error("至少要启用一条召回通路")
-            st.stop()
+        meta_slot = st.empty()      # 查询改写提示
+        conf_slot = st.container()  # 置信度提示条
+        cite_slot = st.container()  # 引用卡片
+        answer_slot = st.empty()    # 流式答案
 
-        pipeline = get_pipeline()
-        history = [
-            {"role": m["role"], "content": m["content"]}
-            for m in st.session_state.messages[:-1]
-        ]
+        citations: list[dict] = []
+        confidence: dict = {}
+        rewritten: str | None = None
+        timings: dict = {}
+        parts: list[str] = []
+        failed: str | None = None
 
         with st.spinner("检索中…"):
-            t = time.perf_counter()
             try:
-                result = pipeline.answer(
+                for event, data in get_client().chat_stream(
                     prompt,
-                    history=history,
+                    session_id=st.session_state.get("session_id"),
+                    top_k=top_k,
                     use_hyde=use_hyde,
                     use_rewrite=use_rewrite,
                     use_rerank=use_rerank,
-                    channels=channels,
-                    top_k=top_k,
-                )
-            except RuntimeError as e:
-                st.error(str(e))
-                st.stop()
+                ):
+                    if event == "meta":
+                        st.session_state["session_id"] = data.get("session_id")
+                        timings = data.get("timings", {})
+                        rewritten = data.get("rewritten_query")
+                        if rewritten:
+                            meta_slot.info(f"🔄 查询已改写为：**{rewritten}**")
+                    elif event == "citations":
+                        citations = data.get("citations", [])
+                        confidence = data.get("confidence", {})
+                        # 引用先于答案落地 —— 用户可以立刻开始读条款原文
+                        with conf_slot:
+                            render_confidence(confidence)
+                        with cite_slot:
+                            render_citations(citations)
+                    elif event == "token":
+                        parts.append(data.get("text", ""))
+                        answer_slot.markdown("".join(parts) + "▌")
+                    elif event == "done":
+                        timings = data.get("timings", timings)
+                    elif event == "error":
+                        failed = data.get("detail", "未知错误")
+                        break
+            except APIError as e:
+                failed = str(e)
 
-        st.markdown(result.answer)
-        citations = result.citations()
-        meta = {
-            "rewritten_query": result.rewritten_query,
-            "timings": result.timings,
-        }
-        render_citations(citations, meta)
+        answer = "".join(parts)
+        if answer:
+            answer_slot.markdown(answer)  # 去掉光标
+        else:
+            answer_slot.empty()
 
-        if result.hypothetical:
-            with st.expander("🧪 HyDE 生成的假设条款（仅用于检索，不作为答案依据）"):
-                for h in result.hypothetical:
-                    st.text(h)
+        if failed:
+            st.error(failed)
+            if citations:
+                # 检索结果仍然有价值，别让这一轮白跑
+                st.caption("生成未完成，但已检索到的条款仍显示在上方引用中。")
+        render_timings(timings)
 
         st.session_state.messages.append(
             {
                 "role": "assistant",
-                "content": result.answer,
+                "content": answer or f"_（本轮未生成答案：{failed or '无输出'}）_",
                 "citations": citations,
-                "meta": meta,
+                "confidence": confidence,
+                "rewritten_query": rewritten,
             }
         )

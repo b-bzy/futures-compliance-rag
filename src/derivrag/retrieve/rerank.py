@@ -173,10 +173,14 @@ class Reranker:
         ]
         scores = self.score(query, docs)
 
-        for h, s in zip(hits, scores):
+        for i, (h, s) in enumerate(zip(hits, scores), 1):
             h.component_scores["rerank"] = float(s)
-            # 保留融合分，便于消融时对比重排前后的名次变化
+            # 保留融合分与融合名次，便于消融时对比重排前后的名次变化。
+            # hits 进来时已按融合分降序（见 fusion.fuse 的返回约定），故枚举序号即融合名次。
+            # 只存分数是不够的：返回的是重排后的 top_k，是送进重排的候选集的子集，
+            # 界面无法从这个子集反推出候选在全量候选里的原始名次。
             h.component_scores.setdefault("fused", h.score)
+            h.component_ranks.setdefault("fused", i)
             h.score = float(s)
             h.source = "rerank"
 

@@ -1,0 +1,27 @@
+# 密钥绝不进镜像 —— 运行时由 compose 的 env_file 注入
+.env
+.env.*
+
+# 语料与索引 292M，通过卷挂载
+data/
+
+# 训练产物与模型缓存
+training/output/
+models/
+*.safetensors
+*.bin
+*.onnx
+
+.git/
+.github/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+*.egg-info/
+
+.DS_Store
+notebooks/
