@@ -224,7 +224,7 @@ LibreOffice 转 HTML 也不渲染。
 
 **决策**：`Fetcher` 每次下载断言三件事 —— Content-Type 匹配、magic bytes 正确
 （PDF `%PDF`、doc `d0cf11e0`、docx `PK`）、长度不在 WAF 指纹表里。
-实测 191 份文档全部通过，0 个验证码页混入语料。
+实测 190 份文档全部通过，0 个验证码页混入语料。
 
 ---
 

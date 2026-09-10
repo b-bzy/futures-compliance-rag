@@ -22,6 +22,23 @@ def repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
+def _load_dotenv_once() -> None:
+    """把 <root>/.env 读进 os.environ，供 ${VAR} 插值使用。
+
+    requirements 里声明了 python-dotenv 却从未调用，导致 .env 形同虚设：
+    api_key 会插值成空字符串，provider 静默降级。这里补上。
+    已存在的环境变量优先（override=False），便于 CI 用真实环境变量覆盖。
+    """
+    env_file = repo_root() / ".env"
+    if not env_file.is_file():
+        return
+    try:
+        from dotenv import load_dotenv
+    except ImportError:  # dotenv 是可选依赖，缺失时退回纯环境变量
+        return
+    load_dotenv(env_file, override=False)
+
+
 def _interpolate(value: Any) -> Any:
     """递归地把 ${VAR} / ${VAR:default} 替换成环境变量值。
 
@@ -66,6 +83,7 @@ class Config(dict):
 @lru_cache(maxsize=8)
 def load_config(path: str | Path | None = None) -> Config:
     """加载主配置。默认读 <root>/configs/config.yaml。"""
+    _load_dotenv_once()  # 必须在 _interpolate 之前，否则 ${VAR} 拿不到 .env 里的值
     cfg_path = Path(path) if path else repo_root() / "configs" / "config.yaml"
     if not cfg_path.is_absolute():
         cfg_path = repo_root() / cfg_path

@@ -1,4 +1,8 @@
-# 语料版权归各交易所所有，只提交抓取脚本，不提交语料
+# 语料版权归各交易所所有，只提交抓取脚本，不提交语料。
+# data/ 整体兜底 —— 只列已知子目录的话，将来新增的产物目录
+# （data/models/、data/cache/…）不会被忽略，可能连语料一起进仓库。
+# 确实要提交 data/ 下的某个文件时，用 !data/xxx 显式放行。
+data/
 data/raw/
 data/interim/
 data/processed/

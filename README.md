@@ -1,6 +1,6 @@
 # 期货合规条款 RAG 检索系统
 
-**覆盖 10 家境内外交易所的 191 份期权业务规则与合约条款，回答精确引用到「某规则第 X 条」。**
+**覆盖 10 家境内外交易所的 190 份期权业务规则与合约条款，回答精确引用到「某规则第 X 条」。**
 
 > A clause-level RAG system for exchange-traded options rules — hybrid retrieval
 > (BM25 + BGE-M3 + metadata) → custom score-aware RRF → cross-encoder reranking,
@@ -8,7 +8,7 @@
 
 ![Python](https://img.shields.io/badge/python-3.12-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Corpus](https://img.shields.io/badge/corpus-191%20docs%20%C2%B7%205.4k%20clauses-orange)
+![Corpus](<https://img.shields.io/badge/corpus-190%20docs%20%C2%B7%205.4k%20clauses-orange>)
 
 > 仓库含两部分：根目录代码是**个人实现**（公开语料，可复现，本 README 的主体）；
 > [docs/product_case.md](docs/product_case.md) 是**公司项目的产品复盘**（已脱敏、不含源码）。
@@ -20,6 +20,7 @@
 ## 效果
 
 <!-- TODO: 补 Streamlit 界面截图或 GIF，放在 docs/assets/demo.png -->
+
 <!-- ![演示](docs/assets/demo.png) -->
 
 实测输出（节选自 `scripts/06_eval.py --generation` 的生成记录）：
@@ -77,13 +78,13 @@ uvicorn derivrag.api.server:app --port 8000 # API 服务
 困难评测集 150 条，命中判定为返回候选的 `parent_id` 是否等于金标条款所在块。
 硬件 Apple M4 / 16GB / MPS。
 
-| 档位 | Recall@1 | Recall@5 | MRR | 平均延迟 |
-|---|---|---|---|---|
-| 仅稠密向量（代理基线） | 0.727 | 0.967 | 0.831 | 0.23s |
-| 仅 BM25 | 0.407 | 0.607 | 0.491 | 0.01s |
-| BM25 + 稠密，标准 RRF | 0.620 | 0.887 | 0.738 | 0.10s |
-| 三路召回 + **自研 score-RRF** | 0.740 | 0.967 | 0.836 | 0.10s |
-| **+ 交叉编码器重排** | **0.807** | **0.993** | **0.888** | 4.53s |
+| 档位                               | Recall@1        | Recall@5        | MRR             | 平均延迟 |
+| ---------------------------------- | --------------- | --------------- | --------------- | -------- |
+| 仅稠密向量（代理基线）             | 0.727           | 0.967           | 0.831           | 0.23s    |
+| 仅 BM25                            | 0.407           | 0.607           | 0.491           | 0.01s    |
+| BM25 + 稠密，标准 RRF              | 0.620           | 0.887           | 0.738           | 0.10s    |
+| 三路召回 +**自研 score-RRF** | 0.740           | 0.967           | 0.836           | 0.10s    |
+| **+ 交叉编码器重排**         | **0.807** | **0.993** | **0.888** | 4.53s    |
 
 **端到端 Recall@1 +8.0 pp（相对提升 11.0%）。最值得说的一行是第 3 → 第 4 行：
 标准 RRF 只看名次不看分数，弱的 BM25 结果会把强的稠密结果挤下去 —— 混合后（0.620）
@@ -111,7 +112,7 @@ python scripts/07_ablation.py --gold data/qa/gold_hard.jsonl # 重跑消融
 
 - **三路混合召回** —— BM25（注入约 80 个衍生品术语的 jieba 词典）+ bge-m3 稠密向量
   + 关键词元数据。不加词典，"备兑开仓"会被切成"备兑/开仓"，术语无法整体匹配。
-  → [architecture.md](docs/architecture.md#三路召回的分工)
+    → [architecture.md](docs/architecture.md#三路召回的分工)
 - **自研 score-aware RRF** —— `(1-α)·Σw/(k+rank) + α·Σw·minmax(score)`，
   在标准 RRF 的名次鲁棒性之上保留原始分数的置信度；`α=0` 时精确退化为标准 RRF
   （单元测试断言了这一点），消融实验直接切 α 做 A/B。
@@ -131,15 +132,15 @@ python scripts/07_ablation.py --gold data/qa/gold_hard.jsonl # 重跑消融
 
 ## 文档导航
 
-| 文档 | 内容 |
-|---|---|
+| 文档                                                        | 内容                                                                                  |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------------------- |
 | **[eval/reports/RESULTS.md](eval/reports/RESULTS.md)** | 全部评测结果 —— 消融、HyDE 配对、多轮改写、生成质量，**含推翻自己结论的记录** |
-| **[docs/audit.md](docs/audit.md)** | 自我审计与执行计划 —— 逐条列出当前缺陷（含已修/未修），每条都有诊断脚本证据 |
-| **[docs/decisions.md](docs/decisions.md)** | 15 条技术决策记录 —— 「想怎么做 → 实测发现什么 → 最终怎么做」 |
-| [docs/architecture.md](docs/architecture.md) | 全链路架构图、模块地图、性能特征 |
-| [docs/corpus.md](docs/corpus.md) | 语料规模、来源、覆盖边界与「10 万条条款」口径澄清 |
-| [docs/interview_qa.md](docs/interview_qa.md) | 针对每条简历表述的追问准备 |
-| [docs/product_case.md](docs/product_case.md) | 公司项目的产品复盘（已脱敏，无源码） |
+| **[docs/audit.md](docs/audit.md)**                     | 自我审计与执行计划 —— 逐条列出当前缺陷（含已修/未修），每条都有诊断脚本证据         |
+| **[docs/decisions.md](docs/decisions.md)**             | 15 条技术决策记录 —— 「想怎么做 → 实测发现什么 → 最终怎么做」                     |
+| [docs/architecture.md](docs/architecture.md)                 | 全链路架构图、模块地图、性能特征                                                      |
+| [docs/corpus.md](docs/corpus.md)                             | 语料规模、来源、覆盖边界与「10 万条条款」口径澄清                                     |
+| [docs/interview_qa.md](docs/interview_qa.md)                 | 针对每条简历表述的追问准备                                                            |
+| [docs/product_case.md](docs/product_case.md)                 | 公司项目的产品复盘（已脱敏，无源码）                                                  |
 
 ---
 

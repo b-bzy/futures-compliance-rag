@@ -27,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from derivrag.chunk.clause import split_document  # noqa: E402
 from derivrag.chunk.semantic import build_children  # noqa: E402
-from derivrag.config import load_config, load_sources  # noqa: E402
+from derivrag.config import load_config, load_sources, repo_root  # noqa: E402
 from derivrag.parse.clean import (  # noqa: E402
     extract_doc_no,
     extract_effective_date,
@@ -132,7 +132,17 @@ def resolve_title(rec: dict, parsed: dict, path: Path, title_map: dict[str, str]
 
 def parse_one(rec: dict, cfg, title_map: dict[str, str] | None = None) -> RawDocument | None:
     """解析单份文档。"""
-    path = Path(rec["local_path"])
+    # manifest 里的 local_path 可能是绝对路径（Fetcher 写入时 cfg.resolve 会
+    # 无条件转绝对），也可能是相对路径。绝对路径在 data/ 被搬动后会失效，
+    # 相对路径若按 CWD 解析则要求必须在仓库根目录下执行。两种都统一按
+    # 仓库根目录还原，从而既不依赖 data/ 的历史位置、也不依赖 CWD。
+    raw_path = Path(rec["local_path"])
+    path = raw_path if raw_path.is_absolute() else repo_root() / raw_path
+    if not path.exists():
+        # 绝对路径失效的常见原因是 data/ 整体搬过位置，按文件名回退到当前 raw 目录
+        fallback = cfg.resolve("paths.raw") / raw_path.name
+        if fallback.exists():
+            path = fallback
     if not path.exists():
         logger.warning("文件不存在: %s", path)
         return None

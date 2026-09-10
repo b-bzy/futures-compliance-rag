@@ -94,7 +94,7 @@ models:
 # LLM Provider —— 双通道，配置切换
 # =====================================================================
 llm:
-  provider: ollama             # ollama | deepseek | openai
+  provider: deepseek           # ollama | deepseek | openai
   temperature: 0.1
   max_tokens: 2048
   timeout_seconds: 180
@@ -107,14 +107,16 @@ llm:
     deepseek:
       base_url: "https://api.deepseek.com/v1"
       api_key: "${DEEPSEEK_API_KEY}"
-      model: "deepseek-chat"
+      # 2026-09 实测 /models 只返回 deepseek-flash 与 deepseek-v4-pro；
+      # 旧别名 deepseek-chat 已下线，传它会报模型不存在。
+      model: "deepseek-flash"
     openai:
       base_url: "${OPENAI_BASE_URL:https://api.openai.com/v1}"
       api_key: "${OPENAI_API_KEY}"
       model: "${OPENAI_MODEL:gpt-4o-mini}"
 
   # provider 不可用时按此顺序降级，并打 warning
-  fallback_order: [ollama]
+  fallback_order: [deepseek]
 
 # =====================================================================
 # 检索
@@ -184,9 +186,9 @@ eval:
 
   # RAGAS judge。ollama 可离线但极慢（本地 8B 实测 3 条样本 35 分钟未完成），
   # 出正式数字请配 DEEPSEEK_API_KEY 后改成 deepseek。
-  judge_provider: ollama
+  judge_provider: deepseek
   ragas_metrics: [faithfulness, answer_correctness, context_precision]
-  ragas_max_workers: 1        # 本地 judge 必须为 1；云端 judge 可调到 4-8
+  ragas_max_workers: 4        # 本地 judge 必须为 1；云端 judge 可调到 4-8
   ragas_timeout_seconds: 900
 
   # 消融档位，名称必须与 scripts/07_ablation.py 的 STAGES 键一致

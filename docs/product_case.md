@@ -64,7 +64,7 @@
 | 融合策略 | 自研 score-aware RRF [`retrieve/fusion.py`](../src/derivrag/retrieve/fusion.py)，相对标准 RRF +12.0 pp |
 | 重排序提升 Top-K | 交叉编码器 [`retrieve/rerank.py`](../src/derivrag/retrieve/rerank.py)，Recall@1 +6.7 pp，延迟 0.10s → 4.53s |
 | 按条款语义切分 | 条款级父子分块 [`chunk/clause.py`](../src/derivrag/chunk/clause.py) |
-| OCR | [`parse/pdf.py`](../src/derivrag/parse/pdf.py)；实测 191 份文档里**只有 6 页真正需要 OCR**，PaddleOCR 最终没用上，原因见 [decisions.md](decisions.md) |
+| OCR | [`parse/pdf.py`](../src/derivrag/parse/pdf.py)；实测 190 份文档里**只有 6 页真正需要 OCR**，PaddleOCR 最终没用上，原因见 [decisions.md](decisions.md) |
 | 必须给出处 | 强引用约束生成 [`llm/prompts.py`](../src/derivrag/llm/prompts.py)，引用精确到「某规则第 X 条」 |
 
 同期落地的另一个项目：[大盘市场情绪 Agent](https://github.com/b-bzy/research-sentiment-agent)

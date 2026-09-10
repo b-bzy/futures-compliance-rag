@@ -144,7 +144,7 @@ grep 全仓库 `.py`，以下 key 的代码引用数为 **0**：
 | 已废止过滤 | `$and`+`$ne` 实查 | 1164 条返回，违规 0 |
 | 增量索引路径 | 实跑 `03` 不带 `--rebuild` | 正确识别 0 新增 |
 | Word 自动编号还原 | SSE 交易规则 | 第一条→第一百七十一条连续无重复 |
-| 抓取内容校验 | 191 份文档 | 0 个 WAF 页 / 0 个 text-html 冒充 PDF |
+| 抓取内容校验 | 190 份文档 | 0 个 WAF 页 / 0 个 text-html 冒充 PDF |
 | 单元测试 | pytest | 32/32 通过 |
 | 静态检查 | ruff F,E9 | 清理后 0 error |
 | API | TestClient | `/health` `/stats` 正常 |
