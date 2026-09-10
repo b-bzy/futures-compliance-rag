@@ -96,7 +96,11 @@ models:
 llm:
   provider: deepseek           # ollama | deepseek | openai
   temperature: 0.1
-  max_tokens: 2048
+  # ⚠️ 推理模型的思考 token 与正文共用这个预算。实测 deepseek-flash 在
+  #    2048 下回答「备兑开仓的保证金怎么算？」时，思考就用掉全部 2048、
+  #    finish_reason=length、正文长度 0 —— 界面只显示一个空气泡。
+  #    8192 留出思考余量；provider 另有一次「撞到 length 就提预算重试」的兜底。
+  max_tokens: 8192
   timeout_seconds: 180
 
   providers:

@@ -45,6 +45,20 @@ class LLMUnavailableError(RuntimeError):
     """所有 provider 都不可用。"""
 
 
+class LLMTruncatedError(RuntimeError):
+    """模型没有产出任何正文 —— 通常是思考过程吃满了 token 预算。
+
+    推理模型（deepseek-flash、qwen3 的 think 模式等）的思考 token 与正文
+    共用 max_tokens。预算不足时会在思考阶段就撞上 length 上限，正文一个
+    token 都没输出。实测：max_tokens=2048 时「备兑开仓的保证金怎么算？」
+    返回 finish_reason=length、reasoning_tokens=2048、content 长度 0。
+
+    这个错误存在的意义是**别让它静默**：原先 chat() 直接 `content or ""`，
+    调用方拿到空串，界面显示一个空气泡，无从判断是模型没话说还是被截断。
+    继承 RuntimeError，api/server.py 会把它转成 503 并带上原因。
+    """
+
+
 def _strip_thinking(text: str) -> str:
     """剥掉内联的思考段（部分后端会把 <think> 直接写进 content）。"""
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.S)
@@ -220,14 +234,53 @@ class OpenAICompatProvider(BaseProvider):
         max_tokens: int | None = None,
         stop: list[str] | None = None,
     ) -> str:
+        budget = self.max_tokens if max_tokens is None else max_tokens
+        text, reason, used = self._once(messages, temperature, budget, stop)
+        if text:
+            return text
+
+        # 正文为空。推理模型把预算烧在思考上时 finish_reason 会是 length ——
+        # 提一次预算重试，比直接失败更可能拿到答案；只重试一次，避免成本失控。
+        if reason == "length":
+            retry = min(budget * 3, 16384)
+            logger.warning(
+                "%s 正文为空且 finish_reason=length（思考用了 %s tokens），"
+                "把 max_tokens 从 %d 提到 %d 重试一次",
+                self.name, used, budget, retry,
+            )
+            text, reason, used = self._once(messages, temperature, retry, stop)
+            if text:
+                return text
+
+        raise LLMTruncatedError(
+            f"{self.name} 未产出正文（finish_reason={reason}，"
+            f"completion_tokens={used}）。若 finish_reason 为 length，"
+            f"请调大 configs/config.yaml 的 llm.max_tokens；"
+            f"当前值 {self.max_tokens}。"
+        )
+
+    def _once(
+        self,
+        messages: Sequence[Message | dict[str, str]],
+        temperature: float | None,
+        budget: int,
+        stop: list[str] | None,
+    ) -> tuple[str, str | None, int]:
+        """发一次请求，返回 (正文, finish_reason, completion_tokens)。"""
         resp = self.client.chat.completions.create(
             model=self.model,
             messages=_to_payload(messages),
             temperature=self.temperature if temperature is None else temperature,
-            max_tokens=self.max_tokens if max_tokens is None else max_tokens,
+            max_tokens=budget,
             stop=stop,
         )
-        return _strip_thinking(resp.choices[0].message.content or "")
+        choice = resp.choices[0]
+        used = getattr(getattr(resp, "usage", None), "completion_tokens", 0) or 0
+        return (
+            _strip_thinking(choice.message.content or ""),
+            getattr(choice, "finish_reason", None),
+            used,
+        )
 
     def stream(
         self,
@@ -236,17 +289,35 @@ class OpenAICompatProvider(BaseProvider):
         temperature: float | None = None,
         max_tokens: int | None = None,
     ) -> Iterator[str]:
+        budget = self.max_tokens if max_tokens is None else max_tokens
         s = self.client.chat.completions.create(
             model=self.model,
             messages=_to_payload(messages),
             temperature=self.temperature if temperature is None else temperature,
-            max_tokens=self.max_tokens if max_tokens is None else max_tokens,
+            max_tokens=budget,
             stream=True,
         )
+        emitted = False
+        reason: str | None = None
         for chunk in s:
-            delta = chunk.choices[0].delta
+            if not chunk.choices:
+                continue
+            choice = chunk.choices[0]
+            reason = getattr(choice, "finish_reason", None) or reason
+            delta = choice.delta
             if delta and delta.content:
+                emitted = True
                 yield delta.content
+
+        # 一个正文 token 都没产出时必须显式失败。流式路径下不能重试
+        # （已经开始给前端推事件了），所以直接抛错让 SSE 层发 error 事件，
+        # 而不是让界面留一个空气泡。
+        if not emitted:
+            raise LLMTruncatedError(
+                f"{self.name} 流式响应未产出正文（finish_reason={reason}）。"
+                f"若为 length，请调大 configs/config.yaml 的 llm.max_tokens；"
+                f"当前值 {self.max_tokens}。"
+            )
 
 
 # =====================================================================
