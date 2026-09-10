@@ -1,0 +1,71 @@
+# 衍生品交易条款检索系统 —— 依赖清单
+# 目标环境: conda env "derivrag", Python 3.12, macOS arm64 (Apple Silicon)
+#
+# 安装:
+#   conda create -n derivrag python=3.12 -y
+#   conda activate derivrag
+#   pip install -r requirements.txt
+#
+# ⚠️ 安装前务必阅读 constraints.txt —— 有几个包会静默摧毁本环境。
+
+# ---------- 核心框架 ----------
+langchain>=1.2.0
+langchain-core>=1.2.0
+langchain-classic>=1.0.0          # 1.x 把 retrievers/chains 全部搬到了这里
+langchain-community>=0.4.0
+langchain-chroma>=1.1.0
+langchain-text-splitters>=1.1.0
+langchain-openai>=1.1.0
+langchain-huggingface>=1.2.0
+langchain-ollama>=1.1.0
+
+# ---------- 向量库与检索 ----------
+chromadb>=1.3.0
+rank-bm25>=0.2.2
+jieba>=0.42.1
+
+# ---------- 模型 ----------
+torch>=2.6.0
+transformers>=4.57.0
+sentence-transformers>=3.4.0      # 2.3.1 缺 .rank()/.similarity()/CrossEncoderTrainer
+FlagEmbedding>=1.4.0              # bge-m3 三模(dense+sparse+colbert)的唯一入口
+peft>=0.14.0                      # 0.7.1 的 target-module 映射表里没有 qwen 条目
+accelerate>=1.0.0
+onnxruntime>=1.20.0               # bge-reranker-base ONNX + CoreML 低延迟档
+
+# ---------- 文档解析 ----------
+pymupdf>=1.26.0                   # 主力: 版面/表格/字号层级
+python-docx>=1.1.0                # SSE 2025 规则库正文只在 .docx 附件里
+selectolax>=0.3.21                # 快速 HTML 解析
+beautifulsoup4>=4.12.0
+lxml>=5.0.0
+rapidocr-onnxruntime>=1.4.0       # OCR 兜底(仅 py<3.13 可装，这也是选 3.12 的原因之一)
+
+# ---------- 抓取 ----------
+httpx>=0.27.0
+tenacity>=8.0.0
+
+# ---------- 服务与界面 ----------
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+streamlit>=1.40.0
+pydantic>=2.9.0
+pydantic-settings>=2.6.0
+
+# ---------- 评测 ----------
+ragas>=0.2.15                     # judge 可指向本地 ollama (OpenAI 兼容端点)
+datasets>=3.0.0
+pandas>=2.2.0
+numpy>=1.26.0
+scikit-learn>=1.5.0
+
+# ---------- 工具 ----------
+pyyaml>=6.0
+tqdm>=4.66.0
+rich>=13.0.0
+python-dotenv>=1.0.0
+openai>=1.59.0                    # deepseek / ollama 均走 OpenAI 兼容协议
+
+# ---------- 开发 ----------
+pytest>=8.0.0
+ruff>=0.8.0

@@ -1,0 +1,40 @@
+{
+  "gold_size": 25,
+  "gold_source": "交易所官方问答（人工撰写），非 LLM 生成",
+  "generation": {
+    "n": 25,
+    "keyword_match_mean": 0.4201,
+    "keyword_match_at_0.6": 0.28,
+    "mean_latency_s": 84.59
+  },
+  "multiturn": {
+    "n": 3,
+    "rewrite_success_rate": 1.0,
+    "cases": [
+      {
+        "follow_up": "那深证100ETF期权呢？",
+        "rewritten": "深证100ETF期权的合约单位是多少？",
+        "rewrite_contains_expected": true,
+        "top1_with_rewrite": "szse_sz100etf_contract",
+        "top1_without_rewrite": "szse_sz100etf_contract",
+        "results_differ": true
+      },
+      {
+        "follow_up": "行权日呢？",
+        "rewritten": "50ETF期权的行权日是如何规定的？",
+        "rewrite_contains_expected": true,
+        "top1_with_rewrite": "上证50ETF期权合约基本条款",
+        "top1_without_rewrite": "上证50ETF期权合约基本条款",
+        "results_differ": true
+      },
+      {
+        "follow_up": "它的最小变动价位是多少？",
+        "rewritten": "沪深300股指期权的最小变动价位是多少？",
+        "rewrite_contains_expected": true,
+        "top1_with_rewrite": "沪深300股指期权",
+        "top1_without_rewrite": "shfe_option_admin",
+        "results_differ": true
+      }
+    ]
+  }
+}

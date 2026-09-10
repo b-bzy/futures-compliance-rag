@@ -1,0 +1,56 @@
+{
+  "_comment": "DeepSpeed ZeRO-2 —— bge-reranker-v2-m3 (568M) 单卡 A100-40G / 4090-24G 均可。仅 NVIDIA GPU 可用，macOS 上 DeepSpeed 无法安装。",
+
+  "train_micro_batch_size_per_gpu": "auto",
+  "gradient_accumulation_steps": "auto",
+  "gradient_clipping": 1.0,
+  "steps_per_print": 20,
+  "wall_clock_breakdown": false,
+
+  "fp16": {
+    "enabled": "auto",
+    "loss_scale": 0,
+    "loss_scale_window": 1000,
+    "initial_scale_power": 16,
+    "hysteresis": 2,
+    "min_loss_scale": 1
+  },
+
+  "bf16": {
+    "enabled": "auto"
+  },
+
+  "optimizer": {
+    "type": "AdamW",
+    "params": {
+      "lr": "auto",
+      "betas": [0.9, 0.999],
+      "eps": 1e-8,
+      "weight_decay": "auto"
+    }
+  },
+
+  "scheduler": {
+    "type": "WarmupDecayLR",
+    "params": {
+      "warmup_min_lr": 0,
+      "warmup_max_lr": "auto",
+      "warmup_num_steps": "auto",
+      "total_num_steps": "auto"
+    }
+  },
+
+  "zero_optimization": {
+    "stage": 2,
+    "allgather_partitions": true,
+    "allgather_bucket_size": 200000000,
+    "overlap_comm": true,
+    "reduce_scatter": true,
+    "reduce_bucket_size": 200000000,
+    "contiguous_gradients": true,
+    "_comment_offload": "568M 参数在 24G 卡上无需 offload。若显存吃紧，取消下面的注释",
+    "offload_optimizer": {
+      "device": "none"
+    }
+  }
+}

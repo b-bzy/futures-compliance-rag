@@ -1,0 +1,396 @@
+# 衍生品交易条款语料源清单
+#
+# 每条 URL 均经过实测探针验证（HTTP 状态 + Content-Type + magic bytes + 正文内容确认）。
+# 校验日期: 2026-08-14
+#
+# 字段说明:
+#   id            唯一标识，用作 data/raw 下的文件名前缀
+#   venue         交易所代码
+#   kind          index(需二次解析出子链接) | doc(直接下载)
+#   expect        期望的内容类型: pdf | html | doc | docx
+#   url           直接 URL
+#   adapter       负责解析该 index 的适配器名（kind=index 时必填）
+#   http_only     true 表示必须走 http:// (CFFEX https 直接 TLS 失败)
+#   need_ua       true 表示必须发送浏览器 User-Agent
+#   lang          zh | en
+#   notes         抓取/解析注意事项
+#
+# ⚠️ 版权: 所有交易所文档版权归各交易所所有。本清单仅用于个人作品集与研究，
+#    不再分发语料、不对外提供公开 API。api2.sgx.com 的 robots.txt 为 Disallow: /，
+#    因此其 3 个文件标记为 manual_only，不参与批量爬取。
+
+defaults:
+  rate_limit_seconds: 1.0
+  timeout_seconds: 60
+  max_retries: 3
+  user_agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+
+# =====================================================================
+# 中文核心语料 (默认全量抓取)
+# =====================================================================
+zh:
+  # ------------------- 上海证券交易所 -------------------
+  - id: sse_contract_index
+    venue: SSE
+    kind: index
+    adapter: sse_contract
+    expect: html
+    lang: zh
+    url: https://www.sse.com.cn/assortment/options/contract/
+    notes: >
+      5 个品种(上证50ETF/沪深300ETF/中证500ETF/科创50ETF×2)的完整合约条款表。
+      服务端渲染，plain curl 即可。解析时只保留 <table>，页面 85% 是站点导航。
+
+  - id: sse_rule_index
+    venue: SSE
+    kind: index
+    adapter: sse_rule
+    expect: html
+    lang: zh
+    url: https://www.sse.com.cn/assortment/options/rule/
+    notes: >
+      16 篇试点业务规则。10 篇正文 inline 在 HTML 里，6 篇正文在 .doc 附件中。
+      附件需要两跳: index -> article -> href="<contentId>/files/<hash>.doc"。
+      4 篇标题带（已废止），解析时写入 effective_status 字段。
+
+  - id: sse_guide_index
+    venue: SSE
+    kind: index
+    adapter: sse_guide
+    expect: html
+    lang: zh
+    url: https://www.sse.com.cn/assortment/options/guide/
+    notes: >
+      21 篇配套业务指南与投资者问答 —— 最高价值的中文 QA 来源。
+      c_20150911_3985457.shtml = 50ETF期权经纪业务FAQ V1.2，含 32 对 "N. …？/答：…"。
+      c_20160105_4032141.shtml = 熔断机制问答，8 问但【无 答： 前缀】，需要第二套解析器。
+      分页控件是死的，21 篇即全集。
+
+  - id: sse_rulebook_catalog_vol1
+    title: "上海证券交易所制度规则汇编（业务指南与事务性通知）"
+    venue: SSE
+    kind: doc
+    expect: pdf
+    lang: zh
+    url: https://www.sse.com.cn/lawandrules/sselawsrules2025/overview/c/10778726/files/3f32d9d46a3643bf9d349d6d6941ec3f.pdf
+    notes: 制度规则汇编卷一(14pp)——业务指南+事务性通知，含 11 条期权。提供文号/效力层级真值。
+
+  - id: sse_rulebook_catalog_vol2
+    title: "上海证券交易所制度规则汇编（业务规则与业务细则）"
+    venue: SSE
+    kind: doc
+    expect: pdf
+    lang: zh
+    url: https://www.sse.com.cn/lawandrules/sselawsrules2025/overview/c/10778726/files/ddfc82e93a85496bb075175d9a8d811d.pdf
+    notes: 制度规则汇编卷二(18pp)——业务规则/业务细则，含 21 条期权。两卷都必须抓。
+
+  # ------------------- 中国金融期货交易所 -------------------
+  - id: cffex_rules_index
+    venue: CFFEX
+    kind: index
+    adapter: cffex_rules
+    expect: html
+    lang: zh
+    http_only: true
+    need_ua: true
+    url: http://www.cffex.com.cn/cn/jysgz.html
+    notes: >
+      交易所规则总索引，73 个规则 PDF —— 全项目投入产出比最高的单一入口。
+      【必须 http://】https 会直接 TLS 失败(curl exit 35)。需要浏览器 UA。
+      PDF 路径形如 /u/cms/www/YYYYMM/<hash>.pdf。页面带"历史版本"区块，
+      可作为条款版本演进的评测轴。
+
+  - id: cffex_hs300_option
+    title: "沪深300股指期权合约表"
+    venue: CFFEX
+    kind: doc
+    expect: html
+    lang: zh
+    http_only: true
+    need_ua: true
+    url: http://www.cffex.com.cn/cn/hs300gzqq.html
+    notes: 沪深300股指期权合约表(IO)。HTML inline table，零 OCR。页面带准确性免责声明，引用时需带出。
+
+  - id: cffex_sz50_option
+    title: "上证50股指期权合约表"
+    venue: CFFEX
+    kind: doc
+    expect: html
+    lang: zh
+    http_only: true
+    need_ua: true
+    url: http://www.cffex.com.cn/cn/sz50gzqq.html
+    notes: 上证50股指期权合约表(HO)。
+
+  - id: cffex_zz1000_option
+    title: "中证1000股指期权合约表"
+    venue: CFFEX
+    kind: doc
+    expect: html
+    lang: zh
+    http_only: true
+    need_ua: true
+    url: http://www.cffex.com.cn/cn/zz1000gzqq.html
+    notes: 中证1000股指期权合约表(MO)。
+
+  - id: cffex_faq_index
+    venue: CFFEX
+    kind: index
+    adapter: cffex_faq
+    expect: html
+    lang: zh
+    http_only: true
+    need_ua: true
+    url: http://www.cffex.com.cn/cn/cjwd1.html
+    notes: >
+      常见问答，共 4 页约 40 条原子一问一答。href 直接写在 index HTML 里，
+      形如 /cn/cjwd1/YYYYMMDD/NNNNN.html。这是 Tier-1 金标 QA 来源之一。
+      注意: e-cffex.com.cn 的"百问百答"正文是 JPG 图片，已确认放弃。
+
+  - id: cffex_option_basics
+    title: "中国金融期货交易所股指期权基础知识"
+    venue: CFFEX
+    kind: doc
+    expect: html
+    lang: zh
+    http_only: true
+    need_ua: true
+    url: http://www.cffex.com.cn/cn/gzqqjczs.html
+    notes: 股指期权基础知识。
+
+  - id: cffex_option_strategy
+    title: "中国金融期货交易所股指期权交易策略"
+    venue: CFFEX
+    kind: doc
+    expect: html
+    lang: zh
+    http_only: true
+    need_ua: true
+    url: http://www.cffex.com.cn/cn/gzqqjycl.html
+    notes: 股指期权交易策略。
+
+  # ------------------- 深圳证券交易所 -------------------
+  # ⚠️ www.szse.cn 所有列表页对 curl 返回 0 个链接(客户端渲染)，无 sitemap，
+  #    JSON list API 遍寻不获(/api/search/content=500, /api/search/=404)。
+  #    因此这里只列已验证的静态 PDF 直链；列表枚举交给
+  #    scripts/00_harvest_szse_urls.py (Playwright 一次性) 产出固化 manifest。
+  - id: szse_sz100etf_contract
+    title: "深证100ETF期权合约基本条款"
+    venue: SZSE
+    kind: doc
+    expect: pdf
+    lang: zh
+    url: http://docs.static.szse.cn/www/lawrules/rule/derivative/W020221209571036962477.pdf
+    notes: >
+      深证100ETF期权(159901)合约基本条款 2pp。含 10000份/行权价格间距阶梯/
+      欧式/实物交割/第四个星期三，第 2 页有涨跌停与开仓12%、维持7%保证金公式。
+
+  - id: szse_gemetf_contract
+    title: "创业板ETF期权合约基本条款"
+    venue: SZSE
+    kind: doc
+    expect: pdf
+    lang: zh
+    url: http://docs.static.szse.cn/www/disclosure/notice/general/W020220916720200148638.pdf
+    notes: 创业板ETF期权合约基本条款 2pp。
+
+  - id: szse_guide_marketmaker
+    title: "深圳证券交易所股票期权试点做市商业务指南"
+    venue: SZSE
+    kind: doc
+    expect: pdf
+    lang: zh
+    url: http://docs.static.szse.cn/www/option/rules/guide/W020191207436723290293.pdf
+    notes: 股票期权试点业务指南——做市商 54pp。章/节/一、二、结构，适合多跳检索测试。
+
+  - id: szse_guide_proptrading
+    title: "深圳证券交易所股票期权试点证券公司自营业务指南"
+    venue: SZSE
+    kind: doc
+    expect: pdf
+    lang: zh
+    url: http://docs.static.szse.cn/www/option/rules/guide/W020191207438631022244.pdf
+    notes: 股票期权试点业务指南——证券公司自营 39pp。
+
+  - id: szse_derivative_rule_index
+    venue: SZSE
+    kind: index
+    adapter: szse_rule
+    expect: html
+    lang: zh
+    url: https://www.szse.cn/lawrules/rule/derivative/
+    notes: >
+      本所业务规则·衍生品类。⚠️ raw HTML 里 0 个文章链接(currentMenuId JS 渲染)。
+      adapter 优先读 data/interim/szse_url_manifest.json (由 Playwright 脚本产出)，
+      manifest 不存在时降级为已知种子 ID 直连，并 warn。
+      文章 URL 形如 /lawrules/rule/derivative/tYYYYMMDD_NNNNNN.html。
+
+  # ------------------- 上海期货交易所 -------------------
+  # ⚠️ SHFE/INE 所有 HTML 走 JS-CAPTCHA WAF: 返回 HTTP 200 + 10648 字节防火墙页。
+  #    只有静态 PDF 路径可绕过。fetcher 必须断言 content-type 与长度指纹。
+  - id: shfe_option_admin
+    title: "上海期货交易所期权交易管理办法"
+    venue: SHFE
+    kind: doc
+    expect: pdf
+    lang: zh
+    url: https://www.shfe.com.cn/index/othercontents/2024_Options/JYGL.pdf
+    notes: 上期所期权交易管理办法 12pp。第X条结构，切分友好。
+
+  - id: shfe_cu_option_guide
+    title: "上海期货交易所期权业务指南"
+    venue: SHFE
+    kind: doc
+    expect: pdf
+    lang: zh
+    url: https://www.shfe.com.cn/products/option/nonferrousmetal/cu_o/manual_guid/202601/P020260121586531669879.pdf
+    notes: >
+      铜期权业务指南 29pp(2026-01)，交易/行权/结算三部分，引用 5 部上位办法。
+      路径规律: /products/option/<group>/<code>_o/{standard_<code>_o|manual_guid}/YYYYMM/P0<digits>.pdf
+
+  # ------------------- 大连商品交易所 -------------------
+  # ⚠️ DCE 所有 HTML 返回 412，只有 /resource/cms/ 静态 PDF 可取。
+  - id: dce_soybean_meal_option
+    title: "豆粕期权交易制度汇编"
+    venue: DCE
+    kind: doc
+    expect: pdf
+    lang: zh
+    url: http://www.dce.com.cn/dalianshangpin/resource/cms/2017/03/%E8%B1%86%E7%B2%95%E6%9C%9F%E6%9D%83%E5%88%B6%E5%BA%A6%E6%B1%87%E7%BC%96.pdf
+    notes: >
+      豆粕期权制度汇编 36pp —— 最好的商品期权文档包。
+      ⚠️ 第 0 页是扫描封面(0 字符)，但第 5/20 页各有约 890 字符原生文本。
+      "首页空 => 整篇 OCR" 的启发式会误判，OCR 触发必须用逐页双条件判断。
+
+  - id: dce_soybean_meal_design
+    title: "豆粕期权合约规则及设计说明"
+    venue: DCE
+    kind: doc
+    expect: pdf
+    lang: zh
+    # 侦察阶段给的 .../规则设计说明.pdf 实测 404，真实文件名带"豆粕期权"前缀
+    url: http://www.dce.com.cn/dalianshangpin/resource/cms/2017/03/%E8%B1%86%E7%B2%95%E6%9C%9F%E6%9D%83%E8%A7%84%E5%88%99%E8%AE%BE%E8%AE%A1%E8%AF%B4%E6%98%8E.pdf
+    notes: 豆粕期权规则设计说明。解释性文本，适合作为"为什么这样规定"类问题的语料。
+
+  # ------------------- 郑州商品交易所 -------------------
+  # ⚠️ CZCE HTML 返回 412；旧的 /cn/uploadfile/2024/... 路径已全部 404，
+  #    网上流传的 URL 清单基本失效，只有 /cn/content_file/ 新路径有效。
+  - id: czce_option_admin
+    title: "郑州商品交易所期权交易管理办法"
+    venue: CZCE
+    kind: doc
+    expect: pdf
+    lang: zh
+    url: https://www.czce.com.cn/cn/content_file/flfg/zcjywgz/ywbf/2026/5/889576021a584f73abd8fdac4205188b.pdf
+    notes: 郑商所期权交易管理办法 16pp，现行版（〔2026〕68号）。
+
+# =====================================================================
+# 英文可选层 (--include-en) —— 对应简历"新加坡"背景的跨市场层
+# =====================================================================
+en:
+  - id: sgx_futures_trading_rules
+    title: "SGX-DT Futures Trading Rules"
+    venue: SGX
+    kind: doc
+    expect: html
+    lang: en
+    url: https://rulebook.sgx.com/rulebook/futures-trading-rules
+    notes: >
+      SGX-DT 完整期货交易规则手册，单页 1.22 MB HTML -> 约 464 KB 正文。
+      ⚠️ WebFetch 拿到 403，plain curl/httpx 拿到 200 —— 必须用 httpx 抓。
+      robots.txt 允许 /rulebook/*。
+
+  - id: sgx_dc_clearing_rules
+    title: "SGX-DC Clearing Rules"
+    venue: SGX
+    kind: doc
+    expect: html
+    lang: en
+    url: https://rulebook.sgx.com/rulebook/sgx-dc-clearing-rules
+    notes: "SGX-DC 清算规则 1.77 MB。含期权生命周期: 7.04.5 行权/指派, 7.11 每日结算价。"
+
+  - id: sgx_appendices
+    title: "SGX Rulebook Appendices"
+    venue: SGX
+    kind: doc
+    expect: html
+    lang: en
+    url: https://rulebook.sgx.com/rulebook/appendices-2
+    notes: 各产品最终结算价公式(IODEX/MB Fe/Platts)，信息密度高。
+
+  - id: sgx_st_contract_specs
+    title: "SGX-ST Rule 10.3 Contract Specifications"
+    venue: SGX
+    kind: doc
+    expect: html
+    lang: en
+    url: https://rulebook.sgx.com/rulebook/103-contract-specifications
+    notes: >
+      ⚠️ 实质正文仅 562 字符 / 可见文本 19588 字符 (2.9%)，其余 97% 是全站导航 TOC。
+      不裁剪主内容区，每个块都会是重复导航。
+
+  - id: occ_odd_2024
+    title: "Characteristics and Risks of Standardized Options (OCC ODD, June 2024)"
+    venue: OCC
+    kind: doc
+    expect: pdf
+    lang: en
+    url: https://cdn.robinhood.com/assets/robinhood/legal/Characteristics%20and%20Risks%20of%20Standardized%20Options.pdf
+    notes: >
+      OCC《标准化期权的特征与风险》2024 年 6 月版 96pp —— 最有价值的免费英文期权文档。
+      ⚠️ theocc.com 本身对所有 header 组合均 403，此为持牌方(Robinhood)镜像。
+
+  - id: hkex_hkfe_rulebook
+    title: "HKFE Rules, Regulations and Procedures"
+    venue: HKEX
+    kind: doc
+    expect: pdf
+    lang: en
+    url: https://www.hkex.com.hk/-/media/HKEX-Market/Services/Rules-and-Forms-and-Fees/Rules/HKFE/Whole_HKFE_e.pdf
+    notes: HKFE 完整规则手册 676pp，最大的单一干净规则书。只走 /-/media/ 路径，Sitecore HTML 路由 404。
+
+  - id: hkex_sif_contract_specs
+    title: "HKFE Stock Index Futures and Options Contract Specifications"
+    venue: HKEX
+    kind: doc
+    expect: pdf
+    lang: en
+    url: https://www.hkex.com.hk/-/media/HKEX-Market/Services/Rules-and-Forms-and-Fees/Rules/HKFE/Rules/SIF_CS.pdf
+    notes: 股指期货期权合约规格 158pp(HSI/Mini-HSI/HSCEI 系列)，纯正式条款。
+
+  - id: sec_options_bulletin
+    title: "SEC Investor Bulletin: An Introduction to Options"
+    venue: SEC
+    kind: doc
+    expect: html
+    lang: en
+    url: https://www.investor.gov/introduction-investing/general-resources/news-alerts/alerts-bulletins/investor-bulletins-63
+    notes: SEC 投资者公告《期权入门》。美国政府作品，公有领域 —— 本清单中唯一可再分发的来源。
+
+# =====================================================================
+# 已验证的死路 —— 不要再尝试 (记录在此以免重复踩坑)
+# =====================================================================
+dead_ends:
+  - url: https://www.theocc.com/
+    reason: 对 plain curl / Chrome UA / 完整 Sec-Fetch 头组合均 403，getmedia 与 getcontentasset 路径同样 403
+  - url: http://www.e-cffex.com.cn/web/gzqq1/
+    reason: 百问百答的文章正文是单张 JPG，是唯一真正需要 OCR 的语料；cffex.com.cn/cn/cjwd1.html 已覆盖同样内容且是纯文本
+  - url: https://www.cmegroup.com/content/dam/cmegroup/rulebook/
+    reason: 所有 chapter PDF 路径均 403；contractSpecs.options.html 的条款值不在 HTML 里，只有列名在 data-all-labels-option 属性中
+  - url: https://www.finra.org/investors/
+    reason: 对 curl 所有 header 组合 403，仅 headless 浏览器可取；investor.gov 已覆盖且为公有领域
+  - url: https://www.isda.org/
+    reason: 2021 IRD / 2002 Equity Derivatives Definitions 付费墙($350 会员/$700 非会员)。免费替代已收录 2002 ISDA Master Agreement
+  - url: http://www.isc.com.cn/
+    reason: 中证中小投资者服务中心的"行权"指股东投票权，非期权行权 —— 同形词陷阱，入库会污染检索
+  - url: https://www.sgx.com/sites/default/files/
+    reason: 返回 200 但 Content-Type 是 text/html(SPA 壳)，不是 PDF。真实文件只在 api2.sgx.com
+  - url: https://query.sse.com.cn/search/getESSearchDoc.do
+    reason: 返回 200 JSON 但内容恒为 success=false / error=系统繁忙
+
+# api2.sgx.com robots.txt = Disallow: /  -> 以下 3 个文件仅供手工下载，不纳入爬虫
+manual_only:
+  - url: https://api2.sgx.com/sites/default/files/2018-11/EN%20-%20A50%20Futures%20Contract%20Specifications.pdf
+    notes: SGX FTSE China A50 期货合约规格 6pp(2018 年版)
+  - url: https://api2.sgx.com/sites/default/files/2018-12/SGX%20TSI%20Iron%20Ore%20CFR%20China%20(62%25%20FE%20Fines)%20Index%20Futures.pdf
+    notes: SGX 铁矿石指数期货规格 5pp。条款 2.5(d) 跨 call/put/swap 同向持仓合并计算，是很好的多跳检索测试题

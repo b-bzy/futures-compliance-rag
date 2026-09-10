@@ -1,0 +1,209 @@
+# 期货合规条款 RAG 检索系统 —— 主配置
+#
+# 所有路径相对于仓库根目录。环境变量以 ${VAR} 或 ${VAR:default} 形式引用。
+
+project:
+  name: derivrag
+  root: "."
+
+paths:
+  raw: data/raw
+  interim: data/interim
+  processed: data/processed
+  qa: data/qa
+  chroma: data/chroma
+  bm25: data/interim/bm25_index.pkl
+  manifest: data/raw/manifest.jsonl
+  # 父块直接从 processed/parents.jsonl 读取，不再单独维护 docstore
+
+# =====================================================================
+# 抓取
+# =====================================================================
+crawl:
+  sources_file: configs/sources.yaml
+  include_en: false            # --include-en 覆盖
+  rate_limit_seconds: 1.0
+  timeout_seconds: 60
+  max_retries: 3
+  # 已知的 WAF 拦截页字节长度指纹。SHFE/INE 返回 HTTP 200 + 这个长度的验证码页。
+  waf_length_fingerprints: [10648]
+
+# =====================================================================
+# 解析
+# =====================================================================
+parse:
+  ocr:
+    enabled: true
+    # OCR 触发必须双条件同时满足，单条件会在 DCE 豆粕汇编的扫描封面上误判整篇。
+    min_chars_per_page: 50     # 页面文本少于此值
+    min_image_area_ratio: 0.30 # 且页面图片覆盖面积超过此比例
+  # LibreOffice 用于把 SSE 的 .doc(Word 97 OLE2) 转成 .docx
+  soffice_bin: "/Applications/LibreOffice.app/Contents/MacOS/soffice"
+
+# =====================================================================
+# 分块 —— 父子索引
+# =====================================================================
+chunk:
+  parent:
+    # 中文法规按"第X条"切；切不出条时退化为按标题层级切。
+    # 正则见 src/derivrag/chunk/clause.py 的 CLAUSE_RE ——
+    # 它带一个"第X款/项/目不算条"的否定后视，写在代码里比配置里更安全。
+    max_chars: 4000
+    min_chars: 30
+  child:
+    # semantic = 句向量余弦断点切分；recursive = 纯长度切分（消融对照，不加载模型）
+    # 命令行 --no-semantic 会覆盖为 recursive
+    strategy: semantic
+    target_chars: 300          # 约 200-300 token
+    max_chars: 512
+    min_chars: 80
+    # 语义切分: 句向量余弦距离超过 (mean + z*std) 处断开
+    breakpoint_z: 1.0
+    overlap_sentences: 1
+
+# =====================================================================
+# 模型
+# =====================================================================
+models:
+  embedding:
+    # ⚠️ 用 sentence-transformers 加载 bge-m3 只有 dense —— 仓库虽含
+    #    colbert_linear.pt / sparse_linear.pt，但 modules.json 只声明
+    #    Transformer->Pooling->Normalize，ST 永远不会加载它们。
+    #    backend=flagembedding 才能拿到真正的 dense+sparse+colbert 三模。
+    name: BAAI/bge-m3
+    backend: flagembedding     # flagembedding | sentence-transformers
+    device: mps                # mps | cpu | cuda
+    batch_size: 8
+    max_length: 1024
+    use_fp16: false            # MPS 上 fp16 不稳，保持 fp32
+    return_dense: true
+    return_sparse: true
+    return_colbert: false      # colbert 向量太大，默认关闭；重排阶段已有 cross-encoder
+
+  reranker:
+    # ⚠️ 简历里写的 "BGE-Reranker-M3" 不存在。真实 ID 是 bge-reranker-v2-m3。
+    name: BAAI/bge-reranker-v2-m3
+    device: mps
+    batch_size: 4
+    max_length: 512
+    # 低延迟档: bge-reranker-base 是唯一 ONNX 自包含(无需外部 .onnx_data)的 BGE reranker
+    onnx_fallback: BAAI/bge-reranker-base
+    use_onnx: false
+
+# =====================================================================
+# LLM Provider —— 双通道，配置切换
+# =====================================================================
+llm:
+  provider: ollama             # ollama | deepseek | openai
+  temperature: 0.1
+  max_tokens: 2048
+  timeout_seconds: 180
+
+  providers:
+    ollama:
+      base_url: "http://localhost:11434/v1"
+      api_key: "ollama"        # ollama 不校验，但 OpenAI 客户端要求非空
+      model: "qwen3:latest"    # 8.2B Q4_K_M, 40960 ctx, 实测 16.9 tok/s
+    deepseek:
+      base_url: "https://api.deepseek.com/v1"
+      api_key: "${DEEPSEEK_API_KEY}"
+      model: "deepseek-chat"
+    openai:
+      base_url: "${OPENAI_BASE_URL:https://api.openai.com/v1}"
+      api_key: "${OPENAI_API_KEY}"
+      model: "${OPENAI_MODEL:gpt-4o-mini}"
+
+  # provider 不可用时按此顺序降级，并打 warning
+  fallback_order: [ollama]
+
+# =====================================================================
+# 检索
+# =====================================================================
+retrieve:
+  # 三路召回各自的候选数
+  bm25_top_k: 50
+  dense_top_k: 50
+  keyword_top_k: 20
+
+  # 融合后进入重排的候选数
+  fusion_top_k: 50
+  # 重排后返回给生成器的最终数
+  rerank_top_k: 5
+
+  fusion:
+    # 自研 score-aware 加权 RRF。
+    # langchain 内置 EnsembleRetriever.weighted_reciprocal_rank 只按 rank 融合
+    # (1/(c+rank))、丢弃原始分数；这里保留分数做归一化混合。
+    method: score_rrf          # score_rrf | plain_rrf(消融基线)
+    k: 60                      # RRF 平滑常数
+    score_weight: 0.3          # 归一化分数在最终得分中的占比，0 即退化为纯 rank RRF
+    weights:
+      bm25: 0.30
+      dense: 0.50
+      keyword: 0.20
+
+  # 默认过滤已废止条款。至少 5 份 SSE 文档带（已废止）标记，
+  # 不过滤会拿失效规则回答问题。
+  filter_repealed: true
+
+  parent_expand: true          # 命中子块后返回其父条款作为上下文
+
+# =====================================================================
+# 查询增强
+# =====================================================================
+query:
+  hyde:
+    # 实测：Recall@1 与不开完全打平，延迟 16.4 倍。默认关闭，见 eval/reports/ablation_hyde50.md
+    enabled: false
+    num_hypotheses: 1
+    max_tokens: 256
+  rewrite:
+    enabled: true
+    max_history_turns: 4       # 多轮改写时回看的历史轮数
+
+# =====================================================================
+# 生成
+# =====================================================================
+generate:
+  # 强引用约束（只依据条款作答 / 标注 [n] / 无据则拒答）写在
+  # src/derivrag/llm/prompts.py 的 ANSWER_SYSTEM 里，不做成开关 ——
+  # 它是这个系统的行为底线，不应该可以被配置关掉。
+  max_context_chars: 12000
+
+# =====================================================================
+# 评测
+# =====================================================================
+eval:
+  # ⚠️ 评测必须用去泄漏改写后的集合。原始金标 data/qa/gold.jsonl 的问题原文
+  # 100% 出现在被索引的子块里，直接拿来评测会退化成精确字符串匹配
+  # （实测六个消融档位全是 Recall@1=1.000）。详见 docs/decisions.md D15。
+  gold_file: data/qa/gold_hard.jsonl        # 主评测集：中文合约条款困难集(150)
+  synthetic_file: data/qa/synthetic.jsonl
+  report_dir: eval/reports
+  retrieval_k: [1, 3, 5, 10]
+
+  # RAGAS judge。ollama 可离线但极慢（本地 8B 实测 3 条样本 35 分钟未完成），
+  # 出正式数字请配 DEEPSEEK_API_KEY 后改成 deepseek。
+  judge_provider: ollama
+  ragas_metrics: [faithfulness, answer_correctness, context_precision]
+  ragas_max_workers: 1        # 本地 judge 必须为 1；云端 judge 可调到 4-8
+  ragas_timeout_seconds: 900
+
+  # 消融档位，名称必须与 scripts/07_ablation.py 的 STAGES 键一致
+  ablation_stages:
+    - dense_only
+    - bm25_only
+    - bm25_dense_rrf
+    - three_score_rrf
+    - plus_rerank
+
+# =====================================================================
+# 服务
+# =====================================================================
+service:
+  host: "127.0.0.1"
+  port: 8000
+  # ⚠️ qwen3:8b + bge-m3 + reranker 在 16GB 上无法同时常驻，
+  #    lazy_load 让模型按需加载、空闲时可卸载。
+  lazy_load: true
+  session_ttl_seconds: 3600

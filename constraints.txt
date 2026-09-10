@@ -1,0 +1,80 @@
+# 禁止安装清单 —— 每一条都经过实测验证
+#
+# 这个文件不是给 pip 用的，是给人看的。下面每个包在本项目环境里
+# 都会造成静默的、难以排查的破坏。装之前先读这里。
+#
+# 验证环境: macOS 15.7.4, Apple M4, 16GB, conda derivrag / Python 3.12
+# 验证日期: 2026-08-14
+
+
+## paddlex[base] / paddlex[ie] / paddlex[all]  —— 会摧毁 langchain
+#
+# paddlepaddle 本身有 cp313/cp312 macOS arm64 轮子，不是问题。
+# 问题在 paddlex 的依赖 pin:
+#     langchain<1.0, langchain-community<1.0, langchain-openai<1.0,
+#     langchain-text-splitters<1.0, numpy<2.4
+# pip 会静默把 langchain 1.2.0 降到 0.x，整个 retrieve 层全部 ImportError。
+#
+# 如果确实要用 PP-Structure 做版面识别:
+#     conda create -n paddleocr python=3.12 -y
+#     conda activate paddleocr && pip install paddlepaddle paddleocr
+# 然后用文件系统传 Markdown/JSON 给主环境。见 docs/decisions.md。
+
+
+## surya-ocr  —— 会摧毁 transformers 生态
+#
+# surya-ocr 0.22.1 要求 transformers>=5.12.1 + huggingface-hub>=1.5.0 + torch>=2.7。
+# 装上之后 peft / trl / sentence-transformers 全部失效
+# （sentence-transformers pin transformers<5.0.0）。
+# 也就是说，为了修解析这一半，会顺手废掉微调那一半。
+# 替代: PyMuPDF(已装) -> rapidocr-onnxruntime(已装) -> docling[ocrmac]
+
+
+## mlx-lm>=0.31  —— 同样把 transformers 顶到 5.x
+#
+# mlx-lm 0.31.3 requires transformers>=5.0.0。
+# 如果要用 MLX 跑本地推理，pin: mlx-lm==0.28.4
+
+
+## mineru[mlx]  —— 单独装 mlx extra 会拉 transformers 5.x
+#
+# 必须写成 mineru[pipeline,mlx]，不能只写 mineru[mlx]。
+
+
+## FlagEmbedding[finetune]  —— 依赖 deepspeed + flash-attn
+#
+# 两者都是 CUDA-only 且 sdist-only，在 macOS 上无法构建。
+# 本项目只用 FlagEmbedding 的推理能力(BGEM3FlagModel 三模编码)，
+# 微调走 training/ 下的手写 torch+peft 循环。
+# 正确写法: pip install FlagEmbedding    (不带 extra)
+
+
+## rapidocr-paddle / rapidocr-onnxruntime 在 Python 3.13 下
+#
+# requires_python <3.13，在 3.13 上是硬阻断。
+# 这是本项目选 Python 3.12 而非 3.13 的原因之一。
+# (3.13 上的替代是 rapidocr 3.9.2，API 不同。)
+
+
+## deepspeed  —— macOS 上结构性不可能，不是"慢"
+#
+# - PyPI 上只有 sdist，任何平台都没有预编译轮子
+# - op_builder/builder.py 里 "darwin"/"macos" 出现 0 次，只对 nvcc/hipcc 构建
+# - 其自带的 MPS accelerator 自报:
+#       is_fp16_supported() = False
+#       is_bf16_supported() = False
+#       supported_dtypes()  = [float32]
+#       _communication_backend_name = None   <- ZeRO 无法初始化
+# - 本机 torch.cuda.is_available()=False, nccl_available()=False
+#
+# training/ 下的 DeepSpeed 配置与启动脚本是给租用 GPU 用的，
+# 本机只跑 --smoke（MPS, batch=2, len=256, 3 步）验证数据管线。
+
+
+# =====================================================================
+# 安装前的自检
+# =====================================================================
+# 任何新包进环境前先跑:
+#     pip install --dry-run <pkg> 2>&1 | grep -E "Would (install|uninstall)"
+# 重点看有没有出现 langchain / transformers / sentence-transformers / numpy
+# 的降级或升级。有就停手。

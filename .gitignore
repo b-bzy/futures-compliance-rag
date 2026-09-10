@@ -1,8 +1,39 @@
+# 语料版权归各交易所所有，只提交抓取脚本，不提交语料
+data/raw/
+data/interim/
+data/processed/
+data/chroma/
+data/qa/
+
+# 评测明细里内嵌了条款原文（实测 25 条记录含 5.4 万字符交易所正文），
+# 同样属于语料，不提交。汇总指标在 eval/reports/*.md 与 *.json 里，
+# 明细可用 scripts/06_eval.py 在本地重新生成。
+eval/reports/generation_records.jsonl
+
+# 训练产物
+output/
+*.pkl
+*.safetensors
+*.bin
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+.venv/
+
+# 环境与密钥
+.env
+.env.*
+
+# 编辑器
+.idea/
+.vscode/
+
+# 操作系统与 Office 临时文件（解析 .doc 时会产生 ~$ 前缀临时文件）
 .DS_Store
 Thumbs.db
 *.tmp
 ~$*
-.idea/
-.vscode/
-__pycache__/
-.env
