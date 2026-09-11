@@ -143,6 +143,13 @@ retrieve:
   # 重排后返回给生成器的最终数
   rerank_top_k: 5
 
+  # 精确结构化匹配（查询点名了文件名/文号 + 条号）的置顶上限。
+  # 这类匹配不参与融合投票 —— keyword 通路权重最低(0.20)，单路命中的得分
+  # 上限 0.0623 低于 dense 单路的 0.1557，无论多准都排不进 top-5。
+  # 但只给文号不给条号时一个文号可覆盖 117 个块，全部置顶会挤爆 top_k，
+  # 故设上限：保证该文档被代表，其余名次仍由融合决定。详见 docs/bugfix_log.md
+  max_pinned_exact: 2
+
   fusion:
     # 自研 score-aware 加权 RRF。
     # langchain 内置 EnsembleRetriever.weighted_reciprocal_rank 只按 rank 融合
