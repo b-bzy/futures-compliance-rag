@@ -136,10 +136,22 @@ class RAGPipeline:
                 self.provider,
                 search_query,
                 n=q_cfg.get("hyde", {}).get("num_hypotheses", 1),
-                max_tokens=q_cfg.get("hyde", {}).get("max_tokens", 256),
+                # 默认值必须与 configs/config.yaml 一致。这里曾是 256，
+                # 与 hyde.py 的默认值、config 的值构成三处独立的同名常量，
+                # 改了其中一处另外两处还会复活这个 bug。
+                max_tokens=q_cfg.get("hyde", {}).get("max_tokens", 2048),
             )
             result.hypothetical = expand
             result.timings["hyde"] = time.perf_counter() - t
+            if not expand:
+                # 「请求了 HyDE 但一份假设文档都没拿到」必须与「没请求 HyDE」
+                # 可区分，否则消融实验会把失效的那轮当作 HyDE 档记录，
+                # 测出来的「HyDE 无收益」其实是「HyDE 根本没跑」。
+                result.timings["hyde_ineffective"] = 1.0
+                logger.error(
+                    "HyDE 已启用但未产出任何假设文档，本轮实际等价于未开 HyDE。"
+                    "若正在跑消融实验，plus_hyde 档的数字不可用。"
+                )
 
         # ---- 3. 检索（三路召回 + 融合 + 回溯 + 重排）----
         t = time.perf_counter()

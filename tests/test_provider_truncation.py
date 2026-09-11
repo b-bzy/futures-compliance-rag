@@ -129,6 +129,60 @@ class TestChatTruncation:
         assert p.chat([{"role": "user", "content": "q"}]) == "答案"
 
 
+class TestOutputBudgetFloor:
+    """输出预算下限 —— 在 provider 边界上堵死整类「小预算 → 正文为空」。
+
+    这是对「逐个调用点改数字」的替代：仓库里曾同时存在 HyDE 256、查询改写
+    200、QA 挖掘 512、去泄漏改写 200 四个独立的小预算，且 HyDE 的 256 还
+    分散在 config、hyde.py 默认值、pipeline.py 兜底默认三处。改其中一处，
+    其余几处照样复活同一个 bug。
+    """
+
+    def test_small_budget_raised_to_floor(self):
+        p, comp = _provider([_Resp("假设条款", "stop", 60)], max_tokens=8192)
+        p.min_output_tokens = 1024
+        p.chat([{"role": "user", "content": "q"}], max_tokens=256)
+        assert comp.budgets == [1024], "256 应被抬到下限 1024"
+
+    def test_large_budget_untouched(self):
+        p, comp = _provider([_Resp("答案", "stop", 60)], max_tokens=8192)
+        p.min_output_tokens = 1024
+        p.chat([{"role": "user", "content": "q"}], max_tokens=4096)
+        assert comp.budgets == [4096], "高于下限的预算不应被干预"
+
+    def test_floor_can_be_disabled(self):
+        """非推理模型不该被强行抬高 —— 下限必须可关。"""
+        p, comp = _provider([_Resp("答案", "stop", 60)])
+        p.min_output_tokens = 0
+        p.chat([{"role": "user", "content": "q"}], max_tokens=200)
+        assert comp.budgets == [200]
+
+    def test_floor_warns_only_once(self, caplog):
+        """下限告警不能刷屏 —— 去泄漏改写会连着调用 222 次。"""
+        import logging as _logging
+
+        p, _ = _provider([_Resp("答案", "stop", 60)], max_tokens=8192)
+        p.min_output_tokens = 1024
+        with caplog.at_level(_logging.WARNING):
+            for _ in range(5):
+                p.chat([{"role": "user", "content": "q"}], max_tokens=256)
+        hits = [r for r in caplog.records if "低于下限" in r.message]
+        assert len(hits) == 1, f"应只告警一次，实际 {len(hits)} 次"
+
+    def test_floor_applies_to_stream(self):
+        p, comp = _provider([[_Resp("片段", "stop", 5)]], max_tokens=8192)
+        p.min_output_tokens = 1024
+        list(p.stream([{"role": "user", "content": "q"}], max_tokens=200))
+        assert comp.budgets == [1024], "流式路径同样要受下限保护"
+
+    def test_floor_applies_to_default_budget(self):
+        """连 provider 自己的 max_tokens 过小时也要兜住。"""
+        p, comp = _provider([_Resp("答案", "stop", 60)], max_tokens=128)
+        p.min_output_tokens = 1024
+        p.chat([{"role": "user", "content": "q"}])
+        assert comp.budgets == [1024]
+
+
 class TestStreamTruncation:
     def test_stream_yields_content(self):
         p, _ = _provider([[_Resp("上证", "", 0), _Resp("50ETF", "stop", 8)]])

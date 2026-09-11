@@ -101,6 +101,13 @@ llm:
   #    finish_reason=length、正文长度 0 —— 界面只显示一个空气泡。
   #    8192 留出思考余量；provider 另有一次「撞到 length 就提预算重试」的兜底。
   max_tokens: 8192
+
+  # 输出预算下限。调用方按「这个任务输出很短」传小预算时（HyDE 曾是 256、
+  # 查询改写 200），推理模型会把预算全烧在思考上、正文为空，各调用点再
+  # 各自静默降级 —— 钱花了、时间等了，什么也没拿到。在 provider 边界统一
+  # 兜底，治的是整类问题而不是某个调用点。模型确定不产出 reasoning token
+  # 时可设为 0 关闭。
+  min_output_tokens: 1024
   timeout_seconds: 180
 
   providers:
@@ -162,7 +169,11 @@ query:
     # 实测：Recall@1 与不开完全打平，延迟 16.4 倍。默认关闭，见 eval/reports/ablation_hyde50.md
     enabled: false
     num_hypotheses: 1
-    max_tokens: 256
+    # ⚠️ 同 llm.max_tokens：推理模型的思考与正文共用这个预算。实测
+    #    deepseek-flash 在 256 下 finish_reason=length、reasoning 用满 256、
+    #    假设文档长度 0 —— HyDE 照常付费和等待却拿到空文档，静默降级成不用
+    #    HyDE。2048 下 finish_reason=stop、产出 195 字的正常假设条款。
+    max_tokens: 2048
   rewrite:
     enabled: true
     max_history_turns: 4       # 多轮改写时回看的历史轮数

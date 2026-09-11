@@ -196,6 +196,7 @@ class OpenAICompatProvider(BaseProvider):
         temperature: float = 0.1,
         max_tokens: int = 2048,
         timeout: float = 180.0,
+        min_output_tokens: int = 1024,
     ) -> None:
         self.name = name
         self.base_url = base_url
@@ -204,7 +205,31 @@ class OpenAICompatProvider(BaseProvider):
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.timeout = timeout
+        # 输出预算下限。推理模型的思考 token 与正文共用 max_tokens，调用方
+        # 若按「这个任务输出很短」给一个小预算（HyDE 曾经是 256、查询改写
+        # 200），思考阶段就会撞上 length 上限、正文长度 0 —— 钱花了、时间
+        # 等了，拿到空字符串，然后各调用点各自静默降级。
+        #
+        # 在 provider 边界上兜底，是因为这是**整类**问题：逐个调用点改数字
+        # 治不住下一个新增的调用点。设为 0 可关闭（模型确定不产出 reasoning
+        # token 时，抬高预算只是浪费上限、不影响计费，但没必要）。
+        self.min_output_tokens = max(0, int(min_output_tokens))
+        self._floor_warned = False
         self._client: Any = None
+
+    def _floor(self, budget: int) -> int:
+        """把过小的输出预算抬到下限，并且只告警一次（避免刷屏）。"""
+        if self.min_output_tokens <= 0 or budget >= self.min_output_tokens:
+            return budget
+        if not self._floor_warned:
+            self._floor_warned = True
+            logger.warning(
+                "%s: 调用方请求 max_tokens=%d，低于下限 %d，已抬高。"
+                "推理模型的思考 token 与正文共用预算，过小会导致正文为空。"
+                "如确认该模型不产出 reasoning token，可把 llm.min_output_tokens 设为 0。",
+                self.name, budget, self.min_output_tokens,
+            )
+        return self.min_output_tokens
 
     @property
     def client(self):
@@ -234,7 +259,7 @@ class OpenAICompatProvider(BaseProvider):
         max_tokens: int | None = None,
         stop: list[str] | None = None,
     ) -> str:
-        budget = self.max_tokens if max_tokens is None else max_tokens
+        budget = self._floor(self.max_tokens if max_tokens is None else max_tokens)
         text, reason, used = self._once(messages, temperature, budget, stop)
         if text:
             return text
@@ -289,7 +314,7 @@ class OpenAICompatProvider(BaseProvider):
         temperature: float | None = None,
         max_tokens: int | None = None,
     ) -> Iterator[str]:
-        budget = self.max_tokens if max_tokens is None else max_tokens
+        budget = self._floor(self.max_tokens if max_tokens is None else max_tokens)
         s = self.client.chat.completions.create(
             model=self.model,
             messages=_to_payload(messages),
@@ -367,6 +392,7 @@ def build_provider(cfg: dict | None = None, *, override: str | None = None) -> B
                 temperature=llm_cfg.get("temperature", 0.1),
                 max_tokens=llm_cfg.get("max_tokens", 2048),
                 timeout=llm_cfg.get("timeout_seconds", 180),
+                min_output_tokens=llm_cfg.get("min_output_tokens", 1024),
             )
 
         if provider.health():
