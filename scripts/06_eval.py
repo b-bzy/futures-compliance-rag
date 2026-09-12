@@ -3,9 +3,17 @@
 
 ⚠️ 关于"准确率"这个数字的诚实性:
 
-    评测**只在 Tier-1 人工撰写金标上进行**。Tier-2 是 LLM 挖的，
-    用同一个模型出题再自己判分是循环论证，任何有经验的面试官都会问
-    "你的评测集哪来的"。所以合成集只用于训练，不用于报告指标。
+    铁律是**答案不能由 LLM 撰写** —— 用同一个模型出题再自己判分是
+    循环论证，任何有经验的面试官都会问"你的评测集哪来的"。
+    所以 Tier-2b（LLM 从条款里挖的 QA）只用于训练，绝不用于报告指标。
+
+    可以评测的有两类，都满足"答案非 LLM 撰写"：
+      gold.jsonl / gold_eval.jsonl  交易所工作人员撰写的问答（问题经改写去泄漏）
+      gold_hard.jsonl               合约条款表模板题，答案逐字取自表格单元格
+
+    具体用哪个由 `eval.gold_file` 决定，报告里的来源说明由
+    `derivrag.eval.dataset.describe_gold()` 按数据实际构成生成 ——
+    **不要在这里写死一句"人工撰写"**，换了评测集它就是假陈述。
 
     RAGAS 的 judge 默认指向本地 ollama（OpenAI 兼容端点），可离线运行。
     judge 与被评测的生成模型是同一个时，faithfulness 会略偏乐观，
@@ -31,6 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from derivrag.config import load_config  # noqa: E402
+from derivrag.eval.dataset import describe_gold, load_gold  # noqa: E402
 from derivrag.eval.metrics import (  # noqa: E402
     compute_metrics,
     keyword_match_score,
@@ -63,17 +72,6 @@ MULTITURN_CASES = [
         "expect_in_rewrite": ["沪深300"],
     },
 ]
-
-
-def load_jsonl(path: Path, limit: int = 0) -> list[dict]:
-    out = []
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            try:
-                out.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
-    return out[:limit] if limit else out
 
 
 # =====================================================================
@@ -319,16 +317,25 @@ def main() -> int:
     cfg = load_config()
     gold_path = cfg.resolve("eval.gold_file")
     if not gold_path.exists():
-        logger.error("金标不存在: %s，请先执行 scripts/04_mine_qa.py --tier1", gold_path)
+        logger.error(
+            "评测集不存在: %s。gold.jsonl 由 scripts/04_mine_qa.py --tier1 产出，"
+            "gold_hard.jsonl 由 --hard-eval N 产出",
+            gold_path,
+        )
         return 1
 
-    gold = [g for g in load_jsonl(gold_path, args.limit) if g.get("parent_id")]
-    logger.info("Tier-1 金标 %d 条", len(gold))
+    gold = load_gold(gold_path, args.limit)
+    if not gold:
+        logger.error("评测集为空或缺少 parent_id 字段: %s", gold_path)
+        return 1
+    logger.info("评测集 %s：%d 条 —— %s", gold_path.name, len(gold), describe_gold(gold))
 
     pipeline = RAGPipeline(cfg, lazy=True)
     report: dict = {
+        "gold_file": gold_path.name,
         "gold_size": len(gold),
-        "gold_source": "交易所官方问答（人工撰写），非 LLM 生成",
+        # 来源说明由数据推导，不写死 —— 见模块 docstring
+        "gold_source": describe_gold(gold),
     }
 
     if args.retrieval or args.all:

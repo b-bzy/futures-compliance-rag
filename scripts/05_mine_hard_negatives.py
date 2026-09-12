@@ -7,11 +7,31 @@
 这正是 cross-encoder 该学会的能力。
 
 做法：用当前检索器对每个 QA 的问题做检索，把 top-N 里 parent_id
-不等于金标的候选取作负例。同时剔除与正例文本高度重合的候选 ——
-它们往往是同一条款的不同子块，标成负例是错的标注。
+不等于金标的候选取作负例。
+
+⚠️ 什么**不能**当负例 —— 这条判错会直接教坏 reranker:
+
+    早先的判据是"与正例字符重合度 > 0.85 就剔除"，理由是它们多半是
+    同一条款的不同子块。这条在中文条款表上是错的:
+
+        沪深300ETF期权的行权价格：9个（1个平值合约、4个虚值…
+        深证100ETF期权的行权价格：9个（1个平值合约、4个虚值…
+        字符集 Jaccard = 0.893 -> 被当成"同一条款"剔掉
+
+    可这正是本任务最该学的难负例（"在十几个只差品种名的近似块里选对一个"）。
+    实测该规则会误删 25% 的同字段跨品种样本 —— 把最有价值的训练信号删掉了。
+
+    现在改按**事实身份**判定，与字面相似度无关:
+        条款表行  (品种, 字段) 相同 -> 同一个事实（《合约基本条款》与
+                  《上市交易通知》印的是同一张表），互为正确答案，不能当负例
+        条文      正文归一化后相同或互为子串 -> 同一条款在另一份文档里重印
+    除此之外，只要 parent_id 不同就是合法负例，哪怕它长得几乎一样。
 
 产出 data/qa/reranker_train.jsonl，格式与 FlagEmbedding 训练脚本一致：
     {"query": ..., "pos": [...], "neg": [...]}
+额外写入 `pos_meta` / `neg_meta`（标题、条号）供 08_build_sft_data.py 使用 ——
+FlagEmbedding 只读 query/pos/neg，多余字段会被忽略。缺了它，SFT 的干扰项
+就只有裸文本、而正例带标题，模型能靠"哪条有元数据"猜引用编号。
 
 用法:
     python scripts/05_mine_hard_negatives.py --n-neg 7 --limit 2000
@@ -23,6 +43,7 @@ import argparse
 import json
 import logging
 import random
+import re
 import sys
 from pathlib import Path
 
@@ -52,12 +73,47 @@ def load_jsonl(path: Path) -> list[dict]:
     return out
 
 
-def char_overlap(a: str, b: str) -> float:
-    """字符集合的 Jaccard 相似度 —— 用来剔除"其实是正例"的伪负例。"""
-    sa, sb = set(a), set(b)
-    if not sa or not sb:
-        return 0.0
-    return len(sa & sb) / len(sa | sb)
+def _norm(s: str | None) -> str:
+    """比对用的归一化：去掉全部空白。"""
+    return re.sub(r"\s+", "", s or "")
+
+
+def _subject_of(rec: dict) -> str:
+    """条款表行的主语（品种名）。切分时写在 section_path[0]，兜底用文档标题。"""
+    return _norm((rec.get("section_path") or [""])[0] or rec.get("doc_title", ""))
+
+
+def same_fact(cand: dict, pos: dict) -> bool:
+    """候选块与正例是否在陈述**同一个事实**（互为正确答案，不能当负例）。
+
+    注意判的是事实身份，不是文本相似度 —— "只差品种名"的两行讲的是
+    两个不同事实，必须保留为负例（见模块 docstring）。
+    """
+    if cand.get("chunk_type") == "table_row" and pos.get("chunk_type") == "table_row":
+        return _subject_of(cand) == _subject_of(pos) and _norm(cand.get("clause_id")) == _norm(
+            pos.get("clause_id")
+        )
+
+    a, b = _norm(cand.get("text")), _norm(pos.get("text"))
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    # 同一条款被另一份文档整段重印（修订版、制度汇编本）。
+    # 只在较短一方足够长时才认互为子串，否则"第三条 本细则未规定的……"
+    # 这类通用短句会把正常负例误伤。
+    shorter, longer = (a, b) if len(a) <= len(b) else (b, a)
+    return len(shorter) >= 30 and shorter in longer
+
+
+def neg_meta_of(rec: dict) -> dict:
+    """负例随身携带的元数据 —— 08 渲染 SFT 上下文时要用。"""
+    return {
+        "doc_title": rec.get("doc_title", ""),
+        "doc_no": rec.get("doc_no") or "",
+        "clause_id": rec.get("clause_id") or "",
+        "parent_id": rec.get("parent_id", ""),
+    }
 
 
 def main() -> int:
@@ -65,12 +121,6 @@ def main() -> int:
     ap.add_argument("--n-neg", type=int, default=7, help="每条样本的负例数")
     ap.add_argument("--pool", type=int, default=30, help="从 top-N 候选里挑负例")
     ap.add_argument("--limit", type=int, default=0, help="最多处理多少条 QA")
-    ap.add_argument(
-        "--max-overlap",
-        type=float,
-        default=0.85,
-        help="与正例字符重合度超过此值的候选不作为负例（大概率是同条款的别的子块）",
-    )
     ap.add_argument("--seed", type=int, default=42)
     args = ap.parse_args()
 
@@ -99,6 +149,7 @@ def main() -> int:
     out_path = qa_dir / "reranker_train.jsonl"
     written = 0
     skipped_no_pos = 0
+    dropped_same_fact = 0
     neg_counts: list[int] = []
 
     with open(out_path, "w", encoding="utf-8") as f:
@@ -128,15 +179,23 @@ def main() -> int:
                 continue
 
             negs: list[str] = []
+            negs_meta: list[dict] = []
+            seen_pids: set[str] = set()
             for hit in result.hits:
-                if hit.metadata.get("parent_id") == gold_pid:
+                cand_pid = hit.metadata.get("parent_id", "")
+                if cand_pid == gold_pid or cand_pid in seen_pids:
                     continue
-                text = hit.parent_text or hit.text
+                # 同一父块的多个子块都可能召回，按 parent 去重后只留一条
+                cand_rec = parents.get(cand_pid) or dict(hit.metadata)
+                text = hit.parent_text or cand_rec.get("text") or hit.text
                 if len(text) < 20:
                     continue
-                if char_overlap(text, pos_text) > args.max_overlap:
-                    continue  # 疑似同条款，不能当负例
+                if same_fact(cand_rec, pos_rec):
+                    dropped_same_fact += 1
+                    continue
+                seen_pids.add(cand_pid)
                 negs.append(text[:1500])
+                negs_meta.append(neg_meta_of(cand_rec))
                 if len(negs) >= args.n_neg:
                     break
 
@@ -149,6 +208,9 @@ def main() -> int:
                         "query": qa["question"],
                         "pos": [pos_text[:1500]],
                         "neg": negs,
+                        # 以下字段 FlagEmbedding 不读，供 08_build_sft_data.py 用
+                        "pos_meta": neg_meta_of(pos_rec),
+                        "neg_meta": negs_meta,
                         "qa_id": qa.get("qa_id"),
                         "tier": qa.get("tier"),
                     },
@@ -164,8 +226,9 @@ def main() -> int:
 
     avg_neg = sum(neg_counts) / max(len(neg_counts), 1)
     logger.info(
-        "完成: %d 条训练样本，平均负例 %.1f 个，跳过（找不到正例）%d 条 -> %s",
-        written, avg_neg, skipped_no_pos, out_path,
+        "完成: %d 条训练样本，平均负例 %.1f 个\n"
+        "  跳过（找不到正例）%d 条；剔除（与正例是同一个事实）%d 个候选 -> %s",
+        written, avg_neg, skipped_no_pos, dropped_same_fact, out_path,
     )
     return 0
 

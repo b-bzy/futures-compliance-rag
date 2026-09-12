@@ -26,12 +26,12 @@ import json
 import logging
 import sys
 import time
-from collections import Counter
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from derivrag.config import load_config  # noqa: E402
+from derivrag.eval.dataset import describe_gold, load_gold  # noqa: E402
 from derivrag.eval.metrics import compute_metrics, rank_of  # noqa: E402
 from derivrag.pipeline import RAGPipeline  # noqa: E402
 
@@ -61,19 +61,6 @@ STAGE_LABELS = {
     "plus_rerank": "+ 交叉编码器重排",
     "plus_hyde": "+ HyDE",
 }
-
-
-def load_gold(path: Path, limit: int = 0) -> list[dict]:
-    items = []
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if rec.get("parent_id"):
-                items.append(rec)
-    return items[:limit] if limit else items
 
 
 def run_stage(pipeline: RAGPipeline, gold: list[dict], stage: str, ks: list[int]) -> dict:
@@ -114,26 +101,6 @@ def run_stage(pipeline: RAGPipeline, gold: list[dict], stage: str, ks: list[int]
 
     m = compute_metrics(ranks, latencies, ks)
     return m.to_dict()
-
-
-def describe_gold(gold: list[dict]) -> str:
-    """如实描述评测集的来源构成，写进报告抬头。"""
-    methods = Counter(g.get("mining_method", "unknown") for g in gold)
-    human = sum(v for k, v in methods.items() if k.startswith("human"))
-    template = sum(v for k, v in methods.items() if k.startswith("table_template"))
-    paraphrased = sum(1 for g in gold if "paraphrase" in (g.get("mining_method") or ""))
-    parts = []
-    if human:
-        parts.append(f"交易所官方问答 {human} 条")
-    if template:
-        parts.append(f"合约条款表模板 {template} 条")
-    other = len(gold) - human - template
-    if other > 0:
-        parts.append(f"其他 {other} 条")
-    desc = "、".join(parts) if parts else "来源未标注"
-    if paraphrased:
-        desc += f"；其中 {paraphrased} 条经 LLM 改写去泄漏（问题不再是语料的连续子串）"
-    return desc
 
 
 def render_markdown(results: dict, baseline: str = "dense_only") -> str:
@@ -180,7 +147,7 @@ def main() -> int:
     if not gold:
         logger.error("金标集为空或缺少 parent_id 字段")
         return 1
-    logger.info("金标 %d 条", len(gold))
+    logger.info("评测集 %s：%d 条 —— %s", gold_path.name, len(gold), describe_gold(gold))
 
     # 优先级：命令行 --stages > 配置 eval.ablation_stages > 全部档位
     stages = [s.strip() for s in args.stages.split(",") if s.strip()]

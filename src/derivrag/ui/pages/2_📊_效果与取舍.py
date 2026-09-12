@@ -204,7 +204,10 @@ with tab_method:
         c2.metric("覆盖率 ≥0.6 占比", f"{gen.get('keyword_match_at_0.6', 0):.0%}")
         c3.metric("多轮改写成功率", f"{mt.get('rewrite_success_rate', 0):.0%}", help=f"n={mt.get('n')}")
         st.caption(
-            f"金标来源：{ev.get('gold_source', '—')}（{ev.get('gold_size', '—')} 条）。"
+            # 标签写"评测集"而不是"金标" —— eval.gold_file 可能指向模板生成的
+            # 困难集，叫它金标是抬举。来源说明由 describe_gold() 按数据推导。
+            f"评测集：{ev.get('gold_file', '—')}，{ev.get('gold_size', '—')} 条"
+            f"（{ev.get('gold_source', '—')}）。"
             f"生成平均延迟 {gen.get('mean_latency_s', 0):.1f}s —— 该数字记录于本地 "
             "qwen3 时期，现已切换到 DeepSeek API，延迟大幅下降。"
         )
